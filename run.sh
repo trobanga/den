@@ -272,6 +272,17 @@ if [ -n "$REPO_URL" ]; then
     fi
 fi
 
+# Prepare git config and GPG for commit signing
+GIT_CONFIG_ARGS=""
+if [ -f "$HOME/.gitconfig" ]; then
+    GIT_CONFIG_ARGS="-v $HOME/.gitconfig:/home/node/.gitconfig:ro"
+    echo "Mounting .gitconfig for git settings"
+fi
+if [ -d "$HOME/.gnupg" ]; then
+    GIT_CONFIG_ARGS="$GIT_CONFIG_ARGS -v $HOME/.gnupg:/home/node/.gnupg:ro"
+    echo "Mounting .gnupg for commit signing"
+fi
+
 # Start container
 docker run -d \
     --name "$CONTAINER_NAME" \
@@ -280,6 +291,7 @@ docker run -d \
     -v "$SSH_PUBLIC_KEY:/tmp/host_ssh_key.pub:ro" \
     -v "$CLAUDE_CONFIG:/home/node/.claude" \
     -v "$WORKSPACE_DIR:/workspace" \
+    $GIT_CONFIG_ARGS \
     -e REPO_URL="$REPO_URL" \
     -e REPO_DIR="$REPO_DIR" \
     -e INIT_FIREWALL="$INIT_FIREWALL" \
