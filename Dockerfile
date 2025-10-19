@@ -112,7 +112,10 @@ RUN mkdir -p /run/sshd && \
 RUN mkdir -p /home/node/.ssh && \
   chown -R node:node /home/node/.ssh && \
   chmod 700 /home/node/.ssh && \
-  usermod -p '*' node
+  usermod -p '*' node && \
+  ssh-keyscan -H github.com >> /home/node/.ssh/known_hosts 2>/dev/null && \
+  chown node:node /home/node/.ssh/known_hosts && \
+  chmod 644 /home/node/.ssh/known_hosts
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/

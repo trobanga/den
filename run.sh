@@ -263,25 +263,12 @@ if ! docker image inspect clauntainer:latest >/dev/null 2>&1; then
         .
 fi
 
-# Prepare SSH authentication for git clone
-SSH_AUTH_ARGS=""
+# Prepare GitHub authentication for git clone
 if [ -n "$REPO_URL" ]; then
-    # Check if SSH agent is running and has keys
-    if [ -n "${SSH_AUTH_SOCK:-}" ] && ssh-add -l >/dev/null 2>&1; then
-        echo "Using SSH agent forwarding for git authentication"
-        SSH_AUTH_ARGS="-v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
-    # Check if GitHub SSH key exists
-    elif [ -f "$HOME/.ssh/id_ed25519" ]; then
-        echo "Mounting GitHub SSH key for git authentication"
-        SSH_AUTH_ARGS="-v $HOME/.ssh/id_ed25519:/home/node/.ssh/id_ed25519:ro -v $HOME/.ssh/id_ed25519.pub:/home/node/.ssh/id_ed25519.pub:ro"
-    elif [ -f "$HOME/.ssh/id_rsa" ]; then
-        echo "Mounting GitHub SSH key for git authentication"
-        SSH_AUTH_ARGS="-v $HOME/.ssh/id_rsa:/home/node/.ssh/id_rsa:ro -v $HOME/.ssh/id_rsa.pub:/home/node/.ssh/id_rsa.pub:ro"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        echo "Using GITHUB_TOKEN for authentication"
     else
-        echo "WARNING: No SSH authentication found for git clone"
-        echo "  For private repos, either:"
-        echo "    1. Start ssh-agent: eval \$(ssh-agent) && ssh-add"
-        echo "    2. Ensure ~/.ssh/id_ed25519 or ~/.ssh/id_rsa exists"
+        echo "No GITHUB_TOKEN found. For private repos, set: export GITHUB_TOKEN=ghp_..."
     fi
 fi
 
@@ -293,12 +280,12 @@ docker run -d \
     -v "$SSH_PUBLIC_KEY:/tmp/host_ssh_key.pub:ro" \
     -v "$CLAUDE_CONFIG:/home/node/.claude" \
     -v "$WORKSPACE_DIR:/workspace" \
-    $SSH_AUTH_ARGS \
     -e REPO_URL="$REPO_URL" \
     -e REPO_DIR="$REPO_DIR" \
     -e INIT_FIREWALL="$INIT_FIREWALL" \
     -e START_CLAUDE="$START_CLAUDE" \
     -e SKIP_PERMISSIONS="$SKIP_PERMISSIONS" \
+    -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
     clauntainer:latest
 
 echo ""

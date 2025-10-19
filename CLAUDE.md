@@ -24,25 +24,25 @@ This repository contains a Docker-based secure development environment for Claud
 
 ### Private Repository Authentication
 
-For private GitHub repositories, `run.sh` automatically handles authentication:
+For private GitHub repositories, use a GitHub Personal Access Token:
 
-**Automatic detection (in order of preference):**
-1. **SSH Agent** - If `ssh-agent` is running with keys loaded (recommended)
-2. **SSH Keys** - Mounts `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` if they exist
-3. **Warning** - Displays warning if no authentication found
-
-**Setup for private repos:**
+**Setup:**
 ```bash
-# Option 1: Use SSH agent (recommended)
-eval $(ssh-agent)
-ssh-add ~/.ssh/id_ed25519  # or your GitHub key
+# Create a token at: https://github.com/settings/tokens
+# Required scopes: repo (full control of private repositories)
 
-# Option 2: Ensure GitHub SSH key exists
-ls ~/.ssh/id_ed25519  # Should exist
+# Set the token
+export GITHUB_TOKEN=ghp_yourTokenHere
 
 # Then run clauntainer
 cd ~/my-private-repo && clauntainer -c
 ```
+
+**How it works:**
+- Token is passed to the container as an environment variable
+- Git credential helper automatically uses it for HTTPS cloning
+- No SSH keys needed
+- Works with both public and private repositories
 
 ## Architecture
 

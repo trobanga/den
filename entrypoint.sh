@@ -19,12 +19,10 @@ if [ -f /tmp/host_ssh_key.pub ]; then
     echo "SSH public key installed"
 fi
 
-# Add GitHub to known_hosts
-mkdir -p /home/node/.ssh
-if [ ! -f /home/node/.ssh/known_hosts ] || ! grep -q "github.com" /home/node/.ssh/known_hosts 2>/dev/null; then
-    echo "Adding GitHub to SSH known_hosts..."
-    ssh-keyscan -H github.com >> /home/node/.ssh/known_hosts 2>/dev/null || true
-    chmod 644 /home/node/.ssh/known_hosts
+# Configure git credential helper for GITHUB_TOKEN
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+    echo "Configuring GitHub token authentication..."
+    git config --global credential.helper '!f() { echo "username=git"; echo "password=$GITHUB_TOKEN"; }; f'
 fi
 
 # Start SSH server (requires root)
