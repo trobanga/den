@@ -18,6 +18,30 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 
+# Check for subcommands first
+case "${1:-}" in
+    stop)
+        echo "Stopping Clauntainer..."
+        cd "$SCRIPT_DIR"
+        docker compose down
+        echo "Container stopped and removed"
+        exit 0
+        ;;
+    logs)
+        echo "Showing Clauntainer logs (Ctrl+C to exit)..."
+        cd "$SCRIPT_DIR"
+        docker compose logs -f
+        exit 0
+        ;;
+    restart)
+        echo "Restarting Clauntainer..."
+        cd "$SCRIPT_DIR"
+        docker compose restart
+        echo "Container restarted"
+        exit 0
+        ;;
+esac
+
 # Default values
 SSH_PORT="${SSH_PORT:-2222}"
 REPO_URL="${REPO_URL:-}"
@@ -34,7 +58,11 @@ show_usage() {
     cat <<EOF
 Clauntainer - Secure Claude Code Container Launcher
 
-Usage: run.sh [OPTIONS]   (or 'clauntainer' if in PATH)
+Usage:
+    clauntainer [OPTIONS]              Start the container
+    clauntainer stop                   Stop and remove the container
+    clauntainer logs                   View container logs
+    clauntainer restart                Restart the container
 
 Options:
     -r, --repo URL          Repository URL to clone

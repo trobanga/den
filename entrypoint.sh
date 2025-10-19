@@ -1,6 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+# Generate host keys if they don't exist
+if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+    echo "Generating SSH host keys..."
+    sudo ssh-keygen -A
+fi
+
+# Set up SSH authorized_keys from mounted host key
+if [ -f /tmp/host_ssh_key.pub ]; then
+    mkdir -p /home/node/.ssh
+    cp /tmp/host_ssh_key.pub /home/node/.ssh/authorized_keys
+    chmod 700 /home/node/.ssh
+    chmod 600 /home/node/.ssh/authorized_keys
+    echo "SSH public key installed"
+fi
+
 # Start SSH server (requires root)
 sudo /usr/sbin/sshd
 

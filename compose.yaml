@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   clauntainer:
     build:
@@ -24,8 +22,8 @@ services:
       # Whether to use --dangerously-skip-permissions (default: false)
       - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
     volumes:
-      # Mount SSH public key for authentication
-      - ${SSH_PUBLIC_KEY:-~/.ssh/id_rsa.pub}:/home/node/.ssh/authorized_keys:ro
+      # Mount SSH public key to temp location for copying
+      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro
       # Optional: Mount Claude config
       - ${CLAUDE_CONFIG:-~/.claude}:/home/node/.claude
       # Optional: Persist workspace
