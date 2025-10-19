@@ -40,6 +40,24 @@ case "${1:-}" in
         echo "Container restarted"
         exit 0
         ;;
+    ssh)
+        CONTAINER_NAME="${2:-clauntainer}"
+        # Get the actual port
+        SSH_PORT=$(docker port "$CONTAINER_NAME" 22 2>/dev/null | cut -d: -f2)
+        if [ -z "$SSH_PORT" ]; then
+            echo "ERROR: Container $CONTAINER_NAME is not running or port not found"
+            echo "Run 'clauntainer list' to see running containers"
+            exit 1
+        fi
+        # Connect with optional tmux attachment
+        if [ "${3:-}" = "-t" ] || [ "${3:-}" = "--tmux" ]; then
+            echo "Connecting to $CONTAINER_NAME on port $SSH_PORT (attaching to tmux)..."
+            exec ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+        else
+            echo "Connecting to $CONTAINER_NAME on port $SSH_PORT..."
+            exec ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost
+        fi
+        ;;
     list|ps)
         echo "Running Clauntainers:"
         docker ps --filter "ancestor=clauntainer:latest" --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}\t{{.CreatedAt}}"
@@ -81,6 +99,7 @@ Clauntainer - Secure Claude Code Container Launcher
 
 Usage:
     clauntainer [OPTIONS]              Start a new container
+    clauntainer ssh [NAME] [-t]        SSH into a container (-t for tmux)
     clauntainer stop [NAME]            Stop and remove a container
     clauntainer logs [NAME]            View container logs
     clauntainer restart [NAME]         Restart a container
@@ -110,11 +129,11 @@ Examples:
     cd ~/project1 && clauntainer -c
     cd ~/project2 && clauntainer -c
 
-    # Clone a specific repo and start Claude Code
-    clauntainer -r https://github.com/user/repo -c
+    # SSH into a container
+    clauntainer ssh clauntainer-myproject
 
-    # Specify custom port and name
-    clauntainer -p 3333 -n my-container -r https://github.com/user/repo
+    # SSH and attach to tmux/Claude Code session
+    clauntainer ssh clauntainer-myproject -t
 
     # List all running containers
     clauntainer list
