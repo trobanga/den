@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Start rsyslog for SSH logging
+sudo rsyslogd
+
 # Generate host keys if they don't exist
 if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
     echo "Generating SSH host keys..."

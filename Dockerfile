@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   vim \
   openssh-server \
   tmux \
+  rsyslog \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Ensure default node user has access to /usr/local/share
@@ -91,6 +92,7 @@ RUN chmod +x /usr/local/bin/init-firewall.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
   echo "node ALL=(root) NOPASSWD: /usr/sbin/sshd" >> /etc/sudoers.d/node-firewall && \
   echo "node ALL=(root) NOPASSWD: /usr/bin/ssh-keygen" >> /etc/sudoers.d/node-firewall && \
+  echo "node ALL=(root) NOPASSWD: /usr/sbin/rsyslogd" >> /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # Configure SSH server
@@ -105,10 +107,11 @@ RUN mkdir -p /run/sshd && \
   sed -i 's|#AuthorizedKeysFile.*|AuthorizedKeysFile /home/%u/.ssh/authorized_keys|' /etc/ssh/sshd_config && \
   echo "AllowUsers node" >> /etc/ssh/sshd_config
 
-# Set up SSH for node user
+# Set up SSH for node user and unlock account for SSH access
 RUN mkdir -p /home/node/.ssh && \
   chown -R node:node /home/node/.ssh && \
-  chmod 700 /home/node/.ssh
+  chmod 700 /home/node/.ssh && \
+  usermod -p '*' node
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/
