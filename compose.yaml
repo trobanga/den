@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  clauntainer:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+        TZ: ${TZ:-UTC}
+    image: clauntainer:latest
+    container_name: clauntainer
+    hostname: clauntainer
+    ports:
+      - "${SSH_PORT:-2222}:22"
+    environment:
+      # Repository to clone
+      - REPO_URL=${REPO_URL:-}
+      # Directory to clone into (default: /workspace/repo)
+      - REPO_DIR=${REPO_DIR:-/workspace/repo}
+      # Whether to initialize firewall (default: false)
+      - INIT_FIREWALL=${INIT_FIREWALL:-false}
+      # Whether to auto-start Claude Code (default: true)
+      - START_CLAUDE=${START_CLAUDE:-true}
+      # Whether to use --dangerously-skip-permissions (default: false)
+      - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
+    volumes:
+      # Mount SSH public key for authentication
+      - ${SSH_PUBLIC_KEY:-~/.ssh/id_rsa.pub}:/home/node/.ssh/authorized_keys:ro
+      # Optional: Mount Claude config
+      - ${CLAUDE_CONFIG:-~/.claude}:/home/node/.claude
+      # Optional: Persist workspace
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+      # Optional: Persist command history
+      - command-history:/commandhistory
+    cap_add:
+      # Required for iptables/firewall management
+      - NET_ADMIN
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  command-history:
