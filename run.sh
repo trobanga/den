@@ -21,29 +21,49 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 # Check for subcommands first
 case "${1:-}" in
     stop)
-        echo "Stopping Clauntainer..."
-        cd "$SCRIPT_DIR"
-        docker compose down
+        CONTAINER_NAME="${2:-clauntainer}"
+        echo "Stopping $CONTAINER_NAME..."
+        docker stop "$CONTAINER_NAME" && docker rm "$CONTAINER_NAME"
         echo "Container stopped and removed"
         exit 0
         ;;
     logs)
-        echo "Showing Clauntainer logs (Ctrl+C to exit)..."
-        cd "$SCRIPT_DIR"
-        docker compose logs -f
+        CONTAINER_NAME="${2:-clauntainer}"
+        echo "Showing logs for $CONTAINER_NAME (Ctrl+C to exit)..."
+        docker logs -f "$CONTAINER_NAME"
         exit 0
         ;;
     restart)
-        echo "Restarting Clauntainer..."
-        cd "$SCRIPT_DIR"
-        docker compose restart
+        CONTAINER_NAME="${2:-clauntainer}"
+        echo "Restarting $CONTAINER_NAME..."
+        docker restart "$CONTAINER_NAME"
         echo "Container restarted"
+        exit 0
+        ;;
+    list|ps)
+        echo "Running Clauntainers:"
+        docker ps --filter "ancestor=clauntainer:latest" --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}\t{{.CreatedAt}}"
         exit 0
         ;;
 esac
 
+# Function to find an available port
+find_available_port() {
+    local port
+    # Try random ports between 10000-60000
+    for i in {1..10}; do
+        port=$((RANDOM % 50000 + 10000))
+        if ! ss -tlnH "sport = :$port" 2>/dev/null | grep -q .; then
+            echo "$port"
+            return 0
+        fi
+    done
+    # Fallback: let system assign
+    echo "0"
+}
+
 # Default values
-SSH_PORT="${SSH_PORT:-2222}"
+SSH_PORT="${SSH_PORT:-}"
 REPO_URL="${REPO_URL:-}"
 REPO_DIR="${REPO_DIR:-/workspace/repo}"
 INIT_FIREWALL="${INIT_FIREWALL:-false}"
@@ -52,6 +72,7 @@ SKIP_PERMISSIONS="${SKIP_PERMISSIONS:-false}"
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519_clauntainer.pub}"
 CLAUDE_CONFIG="${CLAUDE_CONFIG:-$HOME/.claude}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-./workspace}"
+CONTAINER_NAME="${CONTAINER_NAME:-}"
 
 # Parse command line arguments
 show_usage() {
@@ -59,41 +80,47 @@ show_usage() {
 Clauntainer - Secure Claude Code Container Launcher
 
 Usage:
-    clauntainer [OPTIONS]              Start the container
-    clauntainer stop                   Stop and remove the container
-    clauntainer logs                   View container logs
-    clauntainer restart                Restart the container
+    clauntainer [OPTIONS]              Start a new container
+    clauntainer stop [NAME]            Stop and remove a container
+    clauntainer logs [NAME]            View container logs
+    clauntainer restart [NAME]         Restart a container
+    clauntainer list                   List all running clauntainers
 
 Options:
     -r, --repo URL          Repository URL to clone
-    -d, --dir PATH         Directory to clone into (default: /workspace/repo)
-    -p, --port PORT        SSH port to expose (default: 2222)
-    -f, --firewall         Initialize firewall on startup
-    -c, --claude           Auto-start Claude Code in tmux
-    -s, --skip-perms       Use --dangerously-skip-permissions flag
-    -k, --key PATH         Path to SSH public key (default: ~/.ssh/id_rsa.pub)
-    -w, --workspace PATH   Path to mount as workspace (default: ./workspace)
-    -h, --help             Show this help message
+    -d, --dir PATH          Directory to clone into (default: /workspace/repo)
+    -p, --port PORT         SSH port to expose (default: auto-assigned)
+    -n, --name NAME         Container name (default: auto-generated from repo)
+    -f, --firewall          Initialize firewall on startup
+    -c, --claude            Auto-start Claude Code in tmux
+    -s, --skip-perms        Use --dangerously-skip-permissions flag
+    -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_clauntainer.pub)
+    -w, --workspace PATH    Path to mount as workspace (default: ./workspace)
+    -h, --help              Show this help message
 
 Environment Variables:
     CLAUDE_CODE_VERSION    Version of Claude Code to install (default: latest)
     TZ                     Timezone (default: UTC)
 
 Examples:
-    # Basic usage - just start container
-    run.sh
-
-    # From any git repo - auto-detects the repo
+    # From any git repo - auto-assigns port and name
     cd ~/code/myproject && clauntainer -c
+
+    # Run multiple containers in parallel (auto-assigns ports)
+    cd ~/project1 && clauntainer -c
+    cd ~/project2 && clauntainer -c
 
     # Clone a specific repo and start Claude Code
     clauntainer -r https://github.com/user/repo -c
 
-    # Clone repo with firewall and skip permissions
-    clauntainer -r https://github.com/user/repo -f -c -s
+    # Specify custom port and name
+    clauntainer -p 3333 -n my-container -r https://github.com/user/repo
 
-    # Custom SSH port and key
-    clauntainer -p 3333 -k ~/.ssh/custom_key.pub
+    # List all running containers
+    clauntainer list
+
+    # Stop a specific container
+    clauntainer stop clauntainer-myproject
 
 After starting, connect via:
     ssh -p $SSH_PORT node@localhost
@@ -120,6 +147,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -p|--port)
             SSH_PORT="$2"
+            shift 2
+            ;;
+        -n|--name)
+            CONTAINER_NAME="$2"
             shift 2
             ;;
         -f|--firewall)
@@ -160,6 +191,7 @@ if [ -z "$REPO_URL" ] && [ -d "$USER_DIR/.git" ]; then
     REPO_URL=$(cd "$USER_DIR" && git remote get-url origin 2>/dev/null || echo "")
     if [ -n "$REPO_URL" ]; then
         echo "Using remote URL: $REPO_URL"
+        echo "Note: Will clone into container workspace (not mount local directory)"
     else
         echo "WARNING: Current directory is a git repo but has no 'origin' remote"
         echo "Please specify a repository URL with -r or add an origin remote"
@@ -182,7 +214,28 @@ fi
 # Create workspace directory if it doesn't exist
 mkdir -p "$WORKSPACE_DIR"
 
+# Auto-assign SSH port if not specified
+if [ -z "$SSH_PORT" ]; then
+    SSH_PORT=$(find_available_port)
+    echo "Auto-assigned SSH port: $SSH_PORT"
+fi
+
+# Generate container name from repo if not specified
+if [ -z "$CONTAINER_NAME" ]; then
+    if [ -n "$REPO_URL" ]; then
+        # Extract repo name from URL
+        REPO_NAME=$(basename "$REPO_URL" .git | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
+        CONTAINER_NAME="clauntainer-${REPO_NAME}"
+    else
+        # Use current directory name
+        DIR_NAME=$(basename "$USER_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
+        CONTAINER_NAME="clauntainer-${DIR_NAME}"
+    fi
+    echo "Auto-generated container name: $CONTAINER_NAME"
+fi
+
 echo "Starting Clauntainer..."
+echo "  Container Name: $CONTAINER_NAME"
 echo "  SSH Port: $SSH_PORT"
 echo "  SSH Key: $SSH_PUBLIC_KEY"
 echo "  Workspace: $WORKSPACE_DIR"
@@ -197,43 +250,78 @@ if [ "$START_CLAUDE" = "true" ]; then
 fi
 echo ""
 
-# Export environment variables for docker compose
-export SSH_PORT REPO_URL REPO_DIR INIT_FIREWALL START_CLAUDE SKIP_PERMISSIONS
-export SSH_PUBLIC_KEY CLAUDE_CONFIG WORKSPACE_DIR
-
-# Change to script directory and start container
-cd "$SCRIPT_DIR" || {
-    echo "ERROR: Failed to change to script directory: $SCRIPT_DIR"
-    exit 1
-}
-
-# Verify compose file exists
-if [ ! -f "compose.yaml" ]; then
-    echo "ERROR: compose.yaml not found in $SCRIPT_DIR"
-    echo "This usually means the script was copied instead of symlinked."
-    echo "Please create a symlink: ln -s /home/trobanga/code/clauntainer/run.sh ~/bin/clauntainer"
-    exit 1
+# Build image if it doesn't exist
+if ! docker image inspect clauntainer:latest >/dev/null 2>&1; then
+    echo "Building clauntainer image..."
+    cd "$SCRIPT_DIR" || {
+        echo "ERROR: Failed to change to script directory: $SCRIPT_DIR"
+        exit 1
+    }
+    docker build -t clauntainer:latest \
+        --build-arg CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}" \
+        --build-arg TZ="${TZ:-UTC}" \
+        .
 fi
 
-docker compose up -d --build
+# Prepare SSH authentication for git clone
+SSH_AUTH_ARGS=""
+if [ -n "$REPO_URL" ]; then
+    # Check if SSH agent is running and has keys
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && ssh-add -l >/dev/null 2>&1; then
+        echo "Using SSH agent forwarding for git authentication"
+        SSH_AUTH_ARGS="-v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
+    # Check if GitHub SSH key exists
+    elif [ -f "$HOME/.ssh/id_ed25519" ]; then
+        echo "Mounting GitHub SSH key for git authentication"
+        SSH_AUTH_ARGS="-v $HOME/.ssh/id_ed25519:/home/node/.ssh/id_ed25519:ro -v $HOME/.ssh/id_ed25519.pub:/home/node/.ssh/id_ed25519.pub:ro"
+    elif [ -f "$HOME/.ssh/id_rsa" ]; then
+        echo "Mounting GitHub SSH key for git authentication"
+        SSH_AUTH_ARGS="-v $HOME/.ssh/id_rsa:/home/node/.ssh/id_rsa:ro -v $HOME/.ssh/id_rsa.pub:/home/node/.ssh/id_rsa.pub:ro"
+    else
+        echo "WARNING: No SSH authentication found for git clone"
+        echo "  For private repos, either:"
+        echo "    1. Start ssh-agent: eval \$(ssh-agent) && ssh-add"
+        echo "    2. Ensure ~/.ssh/id_ed25519 or ~/.ssh/id_rsa exists"
+    fi
+fi
+
+# Start container
+docker run -d \
+    --name "$CONTAINER_NAME" \
+    --cap-add NET_ADMIN \
+    -p "$SSH_PORT:22" \
+    -v "$SSH_PUBLIC_KEY:/tmp/host_ssh_key.pub:ro" \
+    -v "$CLAUDE_CONFIG:/home/node/.claude" \
+    -v "$WORKSPACE_DIR:/workspace" \
+    $SSH_AUTH_ARGS \
+    -e REPO_URL="$REPO_URL" \
+    -e REPO_DIR="$REPO_DIR" \
+    -e INIT_FIREWALL="$INIT_FIREWALL" \
+    -e START_CLAUDE="$START_CLAUDE" \
+    -e SKIP_PERMISSIONS="$SKIP_PERMISSIONS" \
+    clauntainer:latest
 
 echo ""
 echo "Container started successfully!"
 echo ""
 echo "Connect via SSH:"
-echo "  ssh -p $SSH_PORT node@localhost"
+echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_clauntainer node@localhost"
 echo ""
 if [ "$START_CLAUDE" = "true" ]; then
     echo "Claude Code is running in tmux session 'claude'"
     echo "Attach to it:"
-    echo "  ssh -p $SSH_PORT node@localhost -t tmux attach -t claude"
+    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude"
     echo ""
 fi
 echo "Emacs TRAMP connection string:"
 echo "  /ssh:node@localhost#$SSH_PORT:$REPO_DIR"
 echo ""
 echo "View logs:"
-echo "  docker compose logs -f"
+echo "  clauntainer logs $CONTAINER_NAME"
 echo ""
 echo "Stop container:"
-echo "  docker compose down"
+echo "  clauntainer stop $CONTAINER_NAME"
+echo ""
+echo "List all running containers:"
+echo "  clauntainer list"
+echo ""

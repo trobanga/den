@@ -19,6 +19,14 @@ if [ -f /tmp/host_ssh_key.pub ]; then
     echo "SSH public key installed"
 fi
 
+# Add GitHub to known_hosts
+mkdir -p /home/node/.ssh
+if [ ! -f /home/node/.ssh/known_hosts ] || ! grep -q "github.com" /home/node/.ssh/known_hosts 2>/dev/null; then
+    echo "Adding GitHub to SSH known_hosts..."
+    ssh-keyscan -H github.com >> /home/node/.ssh/known_hosts 2>/dev/null || true
+    chmod 644 /home/node/.ssh/known_hosts
+fi
+
 # Start SSH server (requires root)
 sudo /usr/sbin/sshd
 
@@ -31,16 +39,27 @@ if [ "${INIT_FIREWALL:-false}" = "true" ]; then
     echo "Firewall initialized"
 fi
 
+# Ensure workspace is writable by node user
+if [ ! -w /workspace ]; then
+    echo "Fixing /workspace permissions..."
+    sudo chown node:node /workspace
+fi
+
 # Clone repository if REPO_URL is provided
 if [ -n "${REPO_URL:-}" ]; then
     REPO_DIR="${REPO_DIR:-/workspace/repo}"
 
-    if [ -d "$REPO_DIR" ]; then
-        echo "Directory $REPO_DIR already exists, skipping clone"
+    # Check if directory exists and has content (mounted from host)
+    if [ -d "$REPO_DIR" ] && [ "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
+        echo "Directory $REPO_DIR already exists with content, skipping clone"
+    elif [ -d "$REPO_DIR/.git" ]; then
+        echo "Git repository found in $REPO_DIR, skipping clone"
     else
         echo "Cloning repository $REPO_URL to $REPO_DIR..."
-        git clone "$REPO_URL" "$REPO_DIR"
-        echo "Repository cloned successfully"
+        git clone "$REPO_URL" "$REPO_DIR" || {
+            echo "WARNING: Failed to clone repository. Continuing anyway..."
+            mkdir -p "$REPO_DIR"
+        }
     fi
 
     cd "$REPO_DIR"

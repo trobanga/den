@@ -6,6 +6,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repository contains a Docker-based secure development environment for Claude Code with strict network access controls. The container restricts outbound network access to a whitelist of approved domains while maintaining full internal functionality.
 
+## Important Design Principles
+
+### Container Workspace Isolation
+
+**CRITICAL**: The container workspace is ALWAYS separate from the host directory:
+- The container does NOT mount your local code directory
+- When you run `clauntainer` from a git repo, it auto-detects the origin URL and **clones** it into the container
+- Each container gets its own isolated workspace at `/workspace` inside the container
+- Multiple containers can run in parallel, each with its own isolated workspace
+
+**Why this design?**
+- Keeps your host filesystem clean and isolated from container operations
+- Allows multiple containers to work on the same repo without conflicts
+- Prevents accidental modification of host files from within the container
+- Each container is a fresh, reproducible environment
+
+### Private Repository Authentication
+
+For private GitHub repositories, `run.sh` automatically handles authentication:
+
+**Automatic detection (in order of preference):**
+1. **SSH Agent** - If `ssh-agent` is running with keys loaded (recommended)
+2. **SSH Keys** - Mounts `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` if they exist
+3. **Warning** - Displays warning if no authentication found
+
+**Setup for private repos:**
+```bash
+# Option 1: Use SSH agent (recommended)
+eval $(ssh-agent)
+ssh-add ~/.ssh/id_ed25519  # or your GitHub key
+
+# Option 2: Ensure GitHub SSH key exists
+ls ~/.ssh/id_ed25519  # Should exist
+
+# Then run clauntainer
+cd ~/my-private-repo && clauntainer -c
+```
+
 ## Architecture
 
 The project consists of two main components:
