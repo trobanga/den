@@ -300,6 +300,12 @@ docker run -d \
     -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
     clauntainer:latest
 
+# Get the actual assigned port (in case Docker reassigned it)
+ACTUAL_PORT=$(docker port "$CONTAINER_NAME" 22 | cut -d: -f2)
+if [ -n "$ACTUAL_PORT" ]; then
+    SSH_PORT="$ACTUAL_PORT"
+fi
+
 echo ""
 echo "Container started successfully!"
 echo ""
