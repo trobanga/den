@@ -47,14 +47,21 @@ fi
 if [ -n "${REPO_URL:-}" ]; then
     REPO_DIR="${REPO_DIR:-/workspace/repo}"
 
+    # Convert SSH URLs to HTTPS for token-based authentication
+    CLONE_URL="$REPO_URL"
+    if [[ "$CLONE_URL" =~ ^git@github\.com:(.+)$ ]]; then
+        CLONE_URL="https://github.com/${BASH_REMATCH[1]}"
+        echo "Converted SSH URL to HTTPS: $CLONE_URL"
+    fi
+
     # Check if directory exists and has content (mounted from host)
     if [ -d "$REPO_DIR" ] && [ "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
         echo "Directory $REPO_DIR already exists with content, skipping clone"
     elif [ -d "$REPO_DIR/.git" ]; then
         echo "Git repository found in $REPO_DIR, skipping clone"
     else
-        echo "Cloning repository $REPO_URL to $REPO_DIR..."
-        git clone "$REPO_URL" "$REPO_DIR" || {
+        echo "Cloning repository $CLONE_URL to $REPO_DIR..."
+        git clone "$CLONE_URL" "$REPO_DIR" || {
             echo "WARNING: Failed to clone repository. Continuing anyway..."
             mkdir -p "$REPO_DIR"
         }
