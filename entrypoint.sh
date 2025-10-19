@@ -19,14 +19,41 @@ if [ -f /tmp/host_ssh_key.pub ]; then
     echo "SSH public key installed"
 fi
 
+# Copy Claude config directory from host if available
+if [ -d /tmp/host_claude ]; then
+    echo "Copying Claude config directory..."
+    # Remove existing .claude if present, then copy from host
+    rm -rf /home/node/.claude
+    cp -r /tmp/host_claude /home/node/.claude
+    # Ensure all files are writable by the node user
+    chmod -R u+w /home/node/.claude
+    echo "Claude config directory copied and made writable"
+fi
+
+# Copy Claude config file from host if available
+if [ -f /tmp/host_claude.json ]; then
+    cp /tmp/host_claude.json /home/node/.claude.json
+    chmod 644 /home/node/.claude.json
+    echo "Claude config file copied and made writable"
+fi
+
 # Configure git credential helper for GITHUB_TOKEN
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     echo "Configuring GitHub token authentication..."
-    # Use GIT_CONFIG_GLOBAL to avoid potential mount conflicts
+    # Use GIT_CONFIG_GLOBAL to avoid potential mount conflicts with mounted .gitconfig
     export GIT_CONFIG_GLOBAL=/tmp/.gitconfig
-    git config --global credential.helper '!f() { echo "username=git"; echo "password=$GITHUB_TOKEN"; }; f'
-    # Also set in environment for this session
+    # Configure git to inject token into GitHub URLs
+    git config --global url."https://git:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+    # Make GIT_CONFIG_GLOBAL available in user shells
     echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.bashrc
+    if [ -f /home/node/.zshrc ]; then
+        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.zshrc
+    fi
+    if [ -f /home/node/.profile ]; then
+        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.profile
+    else
+        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" > /home/node/.profile
+    fi
 fi
 
 # Start SSH server (requires root)
@@ -87,8 +114,9 @@ if [ "${START_CLAUDE:-true}" = "true" ]; then
         CLAUDE_CMD="$CLAUDE_CMD --dangerously-skip-permissions"
     fi
 
-    # Start Claude in a detached tmux session
-    tmux new-session -d -s claude "cd $REPO_DIR && $CLAUDE_CMD"
+    # Start Claude in a detached tmux session with shell fallback
+    # The '|| exec bash' ensures that if claude exits, we get a shell instead of closing the session
+    tmux new-session -d -s claude "cd $REPO_DIR && $CLAUDE_CMD || exec bash"
     echo "Claude Code started in tmux session 'claude'"
     echo "Connect with: tmux attach -t claude"
 fi

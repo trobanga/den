@@ -52,10 +52,10 @@ case "${1:-}" in
         # Connect with optional tmux attachment
         if [ "${3:-}" = "-t" ] || [ "${3:-}" = "--tmux" ]; then
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT (attaching to tmux)..."
-            exec ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
         else
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT..."
-            exec ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost
+            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost
         fi
         ;;
     list|ps)
@@ -89,7 +89,7 @@ START_CLAUDE="${START_CLAUDE:-true}"
 SKIP_PERMISSIONS="${SKIP_PERMISSIONS:-false}"
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519_clauntainer.pub}"
 CLAUDE_CONFIG="${CLAUDE_CONFIG:-$HOME/.claude}"
-WORKSPACE_DIR="${WORKSPACE_DIR:-./workspace}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-}"  # No default - only mount if explicitly specified
 CONTAINER_NAME="${CONTAINER_NAME:-}"
 
 # Parse command line arguments
@@ -114,7 +114,7 @@ Options:
     -c, --claude            Auto-start Claude Code in tmux
     -s, --skip-perms        Use --dangerously-skip-permissions flag
     -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_clauntainer.pub)
-    -w, --workspace PATH    Path to mount as workspace (default: ./workspace)
+    -w, --workspace PATH    Path to mount as workspace (optional, default: container-internal only)
     -h, --help              Show this help message
 
 Environment Variables:
@@ -225,13 +225,14 @@ if [ ! -f "$SSH_PUBLIC_KEY" ]; then
     exit 1
 fi
 
-# Convert WORKSPACE_DIR to absolute path if it's relative
-if [[ "$WORKSPACE_DIR" != /* ]]; then
-    WORKSPACE_DIR="$USER_DIR/$WORKSPACE_DIR"
+# Convert WORKSPACE_DIR to absolute path if it's relative (only if specified)
+if [ -n "$WORKSPACE_DIR" ]; then
+    if [[ "$WORKSPACE_DIR" != /* ]]; then
+        WORKSPACE_DIR="$USER_DIR/$WORKSPACE_DIR"
+    fi
+    # Create workspace directory if it doesn't exist
+    mkdir -p "$WORKSPACE_DIR"
 fi
-
-# Create workspace directory if it doesn't exist
-mkdir -p "$WORKSPACE_DIR"
 
 # Auto-assign SSH port if not specified
 if [ -z "$SSH_PORT" ]; then
@@ -257,7 +258,9 @@ echo "Starting Clauntainer..."
 echo "  Container Name: $CONTAINER_NAME"
 echo "  SSH Port: $SSH_PORT"
 echo "  SSH Key: $SSH_PUBLIC_KEY"
-echo "  Workspace: $WORKSPACE_DIR"
+if [ -n "$WORKSPACE_DIR" ]; then
+    echo "  Workspace (mounted): $WORKSPACE_DIR"
+fi
 if [ -n "$REPO_URL" ]; then
     echo "  Repository: $REPO_URL"
     echo "  Clone to: $REPO_DIR"
@@ -291,33 +294,63 @@ if [ -n "$REPO_URL" ]; then
     fi
 fi
 
-# Prepare git config and GPG for commit signing
-GIT_CONFIG_ARGS=""
-if [ -f "$HOME/.gitconfig" ]; then
-    GIT_CONFIG_ARGS="-v $HOME/.gitconfig:/home/node/.gitconfig:ro"
-    echo "Mounting .gitconfig for git settings"
-fi
-if [ -d "$HOME/.gnupg" ]; then
-    GIT_CONFIG_ARGS="$GIT_CONFIG_ARGS -v $HOME/.gnupg:/home/node/.gnupg:ro"
-    echo "Mounting .gnupg for commit signing"
-fi
+# Export environment variables for docker compose
+export CONTAINER_NAME
+export SSH_PORT
+export SSH_PUBLIC_KEY
+export CLAUDE_CONFIG
+export GIT_CONFIG="$HOME/.gitconfig"
+export GNUPG_DIR="$HOME/.gnupg"
+export CLAUDE_JSON="$HOME/.claude.json"
+export WORKSPACE_DIR  # Will be empty or set by user
+export REPO_URL
+export REPO_DIR
+export INIT_FIREWALL
+export START_CLAUDE
+export SKIP_PERMISSIONS
+export GITHUB_TOKEN
 
-# Start container
-docker run -d \
-    --name "$CONTAINER_NAME" \
-    --cap-add NET_ADMIN \
-    -p "$SSH_PORT:22" \
-    -v "$SSH_PUBLIC_KEY:/tmp/host_ssh_key.pub:ro" \
-    -v "$CLAUDE_CONFIG:/home/node/.claude" \
-    -v "$WORKSPACE_DIR:/workspace" \
-    $GIT_CONFIG_ARGS \
-    -e REPO_URL="$REPO_URL" \
-    -e REPO_DIR="$REPO_DIR" \
-    -e INIT_FIREWALL="$INIT_FIREWALL" \
-    -e START_CLAUDE="$START_CLAUDE" \
-    -e SKIP_PERMISSIONS="$SKIP_PERMISSIONS" \
-    -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
-    clauntainer:latest
+# Generate compose file on-the-fly
+COMPOSE_FILE="/tmp/clauntainer-$CONTAINER_NAME.yaml"
+cat > "$COMPOSE_FILE" <<'EOF'
+services:
+  clauntainer:
+    image: clauntainer:latest
+    container_name: ${CONTAINER_NAME:-clauntainer}
+    hostname: ${CONTAINER_NAME:-clauntainer}
+    ports:
+      - "${SSH_PORT:-2222}:22"
+    environment:
+      - REPO_URL=${REPO_URL:-}
+      - REPO_DIR=${REPO_DIR:-/workspace/repo}
+      - INIT_FIREWALL=${INIT_FIREWALL:-false}
+      - START_CLAUDE=${START_CLAUDE:-true}
+      - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    volumes:
+      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro
+      - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
+      - ${CLAUDE_JSON:-~/.claude.json}:/tmp/host_claude.json:ro
+      - ${GIT_CONFIG:-~/.gitconfig}:/home/node/.gitconfig:ro
+      - ${GNUPG_DIR:-~/.gnupg}:/home/node/.gnupg:ro
+      - ${WORKSPACE_DIR:-workspace}:/workspace
+      - command-history:/commandhistory
+    cap_add:
+      - NET_ADMIN
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  command-history:
+  workspace:
+EOF
+
+# Use docker compose to start the container
+docker compose -p "clauntainer-$CONTAINER_NAME" -f "$COMPOSE_FILE" up -d
+
+# Clean up temp compose file
+rm -f "$COMPOSE_FILE"
 
 # Get the actual assigned port (in case Docker reassigned it)
 ACTUAL_PORT=$(docker port "$CONTAINER_NAME" 22 | cut -d: -f2)

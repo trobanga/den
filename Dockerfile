@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   openssh-server \
   tmux \
   rsyslog \
+  ncurses-term \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Ensure default node user has access to /usr/local/share
@@ -64,6 +65,10 @@ USER node
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
+# Add npm-global bin to PATH for SSH login shells (bash/sh)
+RUN echo 'export PATH="/usr/local/share/npm-global/bin:$PATH"' >> /home/node/.profile && \
+    echo 'export PATH="/usr/local/share/npm-global/bin:$PATH"' >> /home/node/.bashrc
+
 # Set the default shell to zsh rather than sh
 ENV SHELL=/bin/zsh
 
@@ -79,6 +84,7 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
   -a "source /usr/share/doc/fzf/examples/completion.zsh" \
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
+  -a 'export PATH="/usr/local/share/npm-global/bin:$PATH"' \
   -x
 
 # Install Claude
@@ -94,6 +100,8 @@ RUN chmod +x /usr/local/bin/init-firewall.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/bin/ssh-keygen" >> /etc/sudoers.d/node-firewall && \
   echo "node ALL=(root) NOPASSWD: /usr/sbin/rsyslogd" >> /etc/sudoers.d/node-firewall && \
   echo "node ALL=(root) NOPASSWD: /usr/bin/chown" >> /etc/sudoers.d/node-firewall && \
+  echo "node ALL=(root) NOPASSWD: /bin/sh -c *" >> /etc/sudoers.d/node-firewall && \
+  echo "node ALL=(root) NOPASSWD: /bin/chmod /etc/profile.d/git-config.sh" >> /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # Configure SSH server

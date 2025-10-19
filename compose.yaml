@@ -6,8 +6,8 @@ services:
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
         TZ: ${TZ:-UTC}
     image: clauntainer:latest
-    container_name: clauntainer
-    hostname: clauntainer
+    container_name: ${CONTAINER_NAME:-clauntainer}
+    hostname: ${CONTAINER_NAME:-clauntainer}
     ports:
       - "${SSH_PORT:-2222}:22"
     environment:
@@ -24,11 +24,17 @@ services:
     volumes:
       # Mount SSH public key to temp location for copying
       - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro
-      # Optional: Mount Claude config
-      - ${CLAUDE_CONFIG:-~/.claude}:/home/node/.claude
-      # Optional: Persist workspace
-      - ${WORKSPACE_DIR:-./workspace}:/workspace
-      # Optional: Persist command history
+      # Mount Claude config directory to temp location for copying
+      - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
+      # Mount Claude settings file to temp location for copying
+      - ${CLAUDE_JSON:-~/.claude.json}:/tmp/host_claude.json:ro
+      # Mount git config
+      - ${GIT_CONFIG:-~/.gitconfig}:/home/node/.gitconfig:ro
+      # Mount GPG directory for commit signing
+      - ${GNUPG_DIR:-~/.gnupg}:/home/node/.gnupg:ro
+      # Workspace: use named volume by default, or mount host dir if WORKSPACE_DIR is set
+      - ${WORKSPACE_DIR:-workspace}:/workspace
+      # Persist command history
       - command-history:/commandhistory
     cap_add:
       # Required for iptables/firewall management
@@ -39,3 +45,4 @@ services:
 
 volumes:
   command-history:
+  workspace:  # Named volume for container-internal workspace (default)
