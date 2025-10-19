@@ -22,7 +22,11 @@ fi
 # Configure git credential helper for GITHUB_TOKEN
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     echo "Configuring GitHub token authentication..."
+    # Use GIT_CONFIG_GLOBAL to avoid potential mount conflicts
+    export GIT_CONFIG_GLOBAL=/tmp/.gitconfig
     git config --global credential.helper '!f() { echo "username=git"; echo "password=$GITHUB_TOKEN"; }; f'
+    # Also set in environment for this session
+    echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.bashrc
 fi
 
 # Start SSH server (requires root)
