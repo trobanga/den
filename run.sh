@@ -92,6 +92,8 @@ CLAUDE_CONFIG="${CLAUDE_CONFIG:-$HOME/.claude}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-}"  # No default - only mount if explicitly specified
 CONTAINER_NAME="${CONTAINER_NAME:-}"
 AUTO_SSH="${AUTO_SSH:-true}"  # Automatically SSH into tmux session after starting
+USE_WORKTREE="${USE_WORKTREE:-false}"  # Create and mount a git worktree
+WORKTREE_BRANCH="${WORKTREE_BRANCH:-}"  # Optional branch name for worktree
 
 # Parse command line arguments
 show_usage() {
@@ -116,6 +118,7 @@ Options:
     -s, --skip-perms        Use --dangerously-skip-permissions flag
     -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_clauntainer.pub)
     -w, --workspace PATH    Path to mount as workspace (optional, default: container-internal only)
+    -W, --worktree [NAME]   Create git worktree in .worktrees/ and mount it (optionally specify branch/name)
     --no-ssh                Don't automatically SSH into the container (default: auto-connect)
     -h, --help              Show this help message
 
@@ -126,6 +129,12 @@ Environment Variables:
 Examples:
     # From any git repo - auto-assigns port and name
     cd ~/code/myproject && clauntainer -c
+
+    # Use git worktree (creates .worktrees/<name> and mounts it)
+    cd ~/code/myproject && clauntainer -W -c
+
+    # Use git worktree with specific branch name
+    cd ~/code/myproject && clauntainer -W feature-branch -c
 
     # Run multiple containers in parallel (auto-assigns ports)
     cd ~/project1 && clauntainer -c
@@ -194,6 +203,16 @@ while [[ $# -gt 0 ]]; do
             WORKSPACE_DIR="$2"
             shift 2
             ;;
+        -W|--worktree)
+            USE_WORKTREE="true"
+            # Check if next argument is a branch/worktree name (not a flag)
+            if [ -n "${2:-}" ] && [[ ! "$2" =~ ^- ]]; then
+                WORKTREE_BRANCH="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
         --no-ssh)
             AUTO_SSH="false"
             shift
@@ -239,6 +258,76 @@ fi
 
 if [ -n "$GIT_USER_NAME" ] && [ -n "$GIT_USER_EMAIL" ]; then
     echo "Using git identity: $GIT_USER_NAME <$GIT_USER_EMAIL>"
+fi
+
+# Create git worktree if requested
+if [ "$USE_WORKTREE" = "true" ]; then
+    if [ ! -d "$USER_DIR/.git" ]; then
+        echo "ERROR: --worktree requires being run from a git repository"
+        exit 1
+    fi
+
+    # Determine branch to use for worktree
+    if [ -n "${WORKTREE_BRANCH:-}" ]; then
+        # User specified a branch name
+        TARGET_BRANCH="$WORKTREE_BRANCH"
+        WORKTREE_NAME="$WORKTREE_BRANCH"
+    else
+        # Use current branch
+        TARGET_BRANCH=$(cd "$USER_DIR" && git rev-parse --abbrev-ref HEAD)
+        # Generate worktree name (use container name if set, otherwise use branch name with timestamp)
+        if [ -n "$CONTAINER_NAME" ]; then
+            WORKTREE_NAME="$CONTAINER_NAME"
+        else
+            WORKTREE_NAME="$TARGET_BRANCH-$(date +%s)"
+        fi
+    fi
+
+    echo "Creating git worktree from branch: $TARGET_BRANCH"
+
+    # Create .worktrees directory
+    WORKTREES_DIR="$USER_DIR/.worktrees"
+    mkdir -p "$WORKTREES_DIR"
+
+    WORKTREE_PATH="$WORKTREES_DIR/$WORKTREE_NAME"
+
+    # Check if worktree already exists
+    if [ -d "$WORKTREE_PATH" ]; then
+        echo "Worktree already exists at: $WORKTREE_PATH"
+        echo "Reusing existing worktree"
+    else
+        echo "Creating worktree at: $WORKTREE_PATH"
+
+        # Check if branch exists
+        if cd "$USER_DIR" && git rev-parse --verify "$TARGET_BRANCH" >/dev/null 2>&1; then
+            # Branch exists, create worktree from it
+            cd "$USER_DIR" && git worktree add "$WORKTREE_PATH" "$TARGET_BRANCH" || {
+                echo "ERROR: Failed to create git worktree"
+                exit 1
+            }
+        else
+            # Branch doesn't exist, create new branch and worktree
+            echo "Branch '$TARGET_BRANCH' doesn't exist, creating new branch from HEAD"
+            cd "$USER_DIR" && git worktree add -b "$TARGET_BRANCH" "$WORKTREE_PATH" || {
+                echo "ERROR: Failed to create git worktree with new branch"
+                exit 1
+            }
+        fi
+    fi
+
+    # Set WORKSPACE_DIR to the worktree path
+    WORKSPACE_DIR="$WORKTREE_PATH"
+
+    # Store the parent git directory path for mounting
+    PARENT_GIT_DIR="$USER_DIR/.git"
+
+    # Clear REPO_URL since we're mounting local workspace, not cloning
+    REPO_URL=""
+
+    # Set REPO_DIR to /workspace since we're mounting the worktree directly there
+    REPO_DIR="/workspace"
+
+    echo "Git worktree mounted to container workspace"
 fi
 
 # Validate SSH key exists
@@ -326,6 +415,7 @@ export GIT_CONFIG="$HOME/.gitconfig"
 export GNUPG_DIR="$HOME/.gnupg"
 export CLAUDE_JSON="$HOME/.claude.json"
 export WORKSPACE_DIR  # Will be empty or set by user
+export PARENT_GIT_DIR  # Will be set if using worktree
 export REPO_URL
 export REPO_DIR
 export INIT_FIREWALL
@@ -373,6 +463,13 @@ volumes:
   workspace:
 EOF
 
+# Add parent .git directory mount for worktrees
+if [ -n "${PARENT_GIT_DIR:-}" ]; then
+    # Mount the parent .git directory at the same absolute path as on the host
+    # This is needed because the worktree's .git file contains an absolute path reference
+    sed -i '/^    cap_add:/i\      - '"${PARENT_GIT_DIR}"':'"${PARENT_GIT_DIR}"':ro' "$COMPOSE_FILE"
+fi
+
 # Use docker compose to start the container
 docker compose -p "clauntainer-$CONTAINER_NAME" -f "$COMPOSE_FILE" up -d
 
@@ -412,7 +509,30 @@ echo ""
 
 # Auto-SSH into tmux session if enabled
 if [ "$AUTO_SSH" = "true" ] && [ "$START_CLAUDE" = "true" ]; then
-    echo "Connecting to tmux session..."
-    sleep 2  # Give container a moment to fully start
-    exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+    echo "Waiting for SSH to be ready..."
+
+    # Wait for SSH to be available (max 30 seconds)
+    MAX_RETRIES=30
+    RETRY_COUNT=0
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        if ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer \
+               -o ConnectTimeout=1 \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o LogLevel=ERROR \
+               node@localhost "exit 0" 2>/dev/null; then
+            echo "SSH is ready!"
+            break
+        fi
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        sleep 1
+    done
+
+    if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+        echo "WARNING: SSH didn't become ready in time. You can connect manually with:"
+        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude"
+    else
+        echo "Connecting to tmux session..."
+        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+    fi
 fi

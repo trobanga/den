@@ -10,15 +10,20 @@ This repository contains a Docker-based secure development environment for Claud
 
 ### Container Workspace Isolation
 
-**CRITICAL**: The container workspace is ALWAYS separate from the host directory:
-- The container does NOT mount your local code directory
+**Default behavior**: The container workspace is separate from the host directory:
 - When you run `clauntainer` from a git repo, it auto-detects the origin URL and **clones** it into the container
 - Each container gets its own isolated workspace at `/workspace` inside the container
-- Multiple containers can run in parallel, each with its own isolated workspace
+- Multiple containers can run in parallel, each with their own isolated workspaces
 
-**Why this design?**
+**Git Worktree Mode** (`-W` or `--worktree`):
+- Creates a git worktree in `.worktrees/<container-name>/` on your host
+- Mounts the worktree to `/workspace` in the container
+- Changes in the container are immediately reflected on your host filesystem
+- Useful for working on the same repo in multiple branches simultaneously
+- Each worktree is based on your current branch
+
+**Why separate workspaces by default?**
 - Keeps your host filesystem clean and isolated from container operations
-- Allows multiple containers to work on the same repo without conflicts
 - Prevents accidental modification of host files from within the container
 - Each container is a fresh, reproducible environment
 
@@ -121,6 +126,12 @@ The simplest way to launch a container is using the `run.sh` script:
 
 # Clone a repo and auto-start Claude Code
 ./run.sh -r https://github.com/user/repo -c
+
+# Use git worktree (mounts .worktrees/<current-branch> to container)
+cd ~/my-repo && ./run.sh -W -c
+
+# Use git worktree with specific branch
+cd ~/my-repo && ./run.sh -W feature-branch -c
 
 # With firewall and skip permissions
 ./run.sh -r https://github.com/user/repo -f -c -s
