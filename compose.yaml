@@ -21,6 +21,11 @@ services:
       - START_CLAUDE=${START_CLAUDE:-true}
       # Whether to use --dangerously-skip-permissions (default: false)
       - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
+      # Git user identity (automatically detected from host)
+      - GIT_USER_NAME=${GIT_USER_NAME:-}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-}
+      # GitHub token for private repo access
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     volumes:
       # Mount SSH public key to temp location for copying
       - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro

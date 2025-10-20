@@ -125,6 +125,10 @@ RUN mkdir -p /home/node/.ssh && \
   chown node:node /home/node/.ssh/known_hosts && \
   chmod 644 /home/node/.ssh/known_hosts
 
+# Copy tmux configuration
+COPY .tmux.conf /home/node/.tmux.conf
+RUN chown node:node /home/node/.tmux.conf
+
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh

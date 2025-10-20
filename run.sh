@@ -91,6 +91,7 @@ SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519_clauntainer.pub}"
 CLAUDE_CONFIG="${CLAUDE_CONFIG:-$HOME/.claude}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-}"  # No default - only mount if explicitly specified
 CONTAINER_NAME="${CONTAINER_NAME:-}"
+AUTO_SSH="${AUTO_SSH:-true}"  # Automatically SSH into tmux session after starting
 
 # Parse command line arguments
 show_usage() {
@@ -115,6 +116,7 @@ Options:
     -s, --skip-perms        Use --dangerously-skip-permissions flag
     -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_clauntainer.pub)
     -w, --workspace PATH    Path to mount as workspace (optional, default: container-internal only)
+    --no-ssh                Don't automatically SSH into the container (default: auto-connect)
     -h, --help              Show this help message
 
 Environment Variables:
@@ -192,6 +194,10 @@ while [[ $# -gt 0 ]]; do
             WORKSPACE_DIR="$2"
             shift 2
             ;;
+        --no-ssh)
+            AUTO_SSH="false"
+            shift
+            ;;
         -h|--help)
             show_usage
             exit 0
@@ -216,6 +222,23 @@ if [ -z "$REPO_URL" ] && [ -d "$USER_DIR/.git" ]; then
         echo "Please specify a repository URL with -r or add an origin remote"
         exit 1
     fi
+fi
+
+# Extract git user configuration from current repo or global config
+GIT_USER_NAME=""
+GIT_USER_EMAIL=""
+if [ -d "$USER_DIR/.git" ]; then
+    # Try repo-specific config first, then fall back to global
+    GIT_USER_NAME=$(cd "$USER_DIR" && git config user.name 2>/dev/null || echo "")
+    GIT_USER_EMAIL=$(cd "$USER_DIR" && git config user.email 2>/dev/null || echo "")
+else
+    # Use global git config if not in a repo
+    GIT_USER_NAME=$(git config --global user.name 2>/dev/null || echo "")
+    GIT_USER_EMAIL=$(git config --global user.email 2>/dev/null || echo "")
+fi
+
+if [ -n "$GIT_USER_NAME" ] && [ -n "$GIT_USER_EMAIL" ]; then
+    echo "Using git identity: $GIT_USER_NAME <$GIT_USER_EMAIL>"
 fi
 
 # Validate SSH key exists
@@ -309,6 +332,8 @@ export INIT_FIREWALL
 export START_CLAUDE
 export SKIP_PERMISSIONS
 export GITHUB_TOKEN
+export GIT_USER_NAME
+export GIT_USER_EMAIL
 
 # Generate compose file on-the-fly
 COMPOSE_FILE="/tmp/clauntainer-$CONTAINER_NAME.yaml"
@@ -327,6 +352,8 @@ services:
       - START_CLAUDE=${START_CLAUDE:-true}
       - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GIT_USER_NAME=${GIT_USER_NAME:-}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-}
     volumes:
       - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro
       - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
@@ -382,3 +409,10 @@ echo ""
 echo "List all running containers:"
 echo "  clauntainer list"
 echo ""
+
+# Auto-SSH into tmux session if enabled
+if [ "$AUTO_SSH" = "true" ] && [ "$START_CLAUDE" = "true" ]; then
+    echo "Connecting to tmux session..."
+    sleep 2  # Give container a moment to fully start
+    exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+fi

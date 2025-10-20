@@ -34,7 +34,10 @@ fi
 if [ -f /tmp/host_claude.json ]; then
     cp /tmp/host_claude.json /home/node/.claude.json
     chmod 644 /home/node/.claude.json
-    echo "Claude config file copied and made writable"
+    # Update installMethod to npm since we install globally via npm in the container
+    jq '.installMethod = "npm"' /home/node/.claude.json > /tmp/.claude.json.tmp && \
+        mv /tmp/.claude.json.tmp /home/node/.claude.json
+    echo "Claude config file copied and made writable (installMethod updated to npm)"
 fi
 
 # Configure git credential helper for GITHUB_TOKEN
@@ -54,6 +57,27 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
     else
         echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" > /home/node/.profile
     fi
+fi
+
+# Configure git user identity if provided
+if [ -n "${GIT_USER_NAME:-}" ] && [ -n "${GIT_USER_EMAIL:-}" ]; then
+    echo "Configuring git identity: $GIT_USER_NAME <$GIT_USER_EMAIL>"
+    # Ensure GIT_CONFIG_GLOBAL is set for user config
+    if [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
+        export GIT_CONFIG_GLOBAL=/tmp/.gitconfig
+        # Make GIT_CONFIG_GLOBAL available in user shells
+        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.bashrc
+        if [ -f /home/node/.zshrc ]; then
+            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.zshrc
+        fi
+        if [ -f /home/node/.profile ]; then
+            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" >> /home/node/.profile
+        else
+            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig" > /home/node/.profile
+        fi
+    fi
+    git config --global user.name "$GIT_USER_NAME"
+    git config --global user.email "$GIT_USER_EMAIL"
 fi
 
 # Start SSH server (requires root)
