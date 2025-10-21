@@ -133,12 +133,39 @@ cd ~/my-repo && ./run.sh -W -c
 # Use git worktree with specific branch
 cd ~/my-repo && ./run.sh -W feature-branch -c
 
+# Use a Dockerfile flavor for specific project needs (e.g., Flutter)
+cd ~/flutter-project && ./run.sh -c -F flutter
+
 # With firewall and skip permissions
 ./run.sh -r https://github.com/user/repo -f -c -s
 
 # Custom SSH port
 ./run.sh -p 3333 -r https://github.com/user/repo
 ```
+
+### Dockerfile Flavors
+
+Clauntainer supports multiple Dockerfile variants for different project requirements using the `-F` or `--flavor` flag:
+
+**Creating a flavor:**
+1. Create a new Dockerfile with the pattern `Dockerfile.<flavor-name>` (e.g., `Dockerfile.flutter`)
+2. Base it on the main `Dockerfile` or customize as needed
+3. Use it with: `clauntainer -c -F <flavor-name>`
+
+**Built-in flavors:**
+- `flutter` - Includes Flutter SDK for mobile app development (Dockerfile.flutter)
+
+**Example custom flavor:**
+```bash
+# Create Dockerfile.python for Python projects
+cp Dockerfile Dockerfile.python
+# Add Python-specific tools to Dockerfile.python
+
+# Use the Python flavor
+cd ~/my-python-project && clauntainer -c -F python
+```
+
+Each flavor builds and uses a separate Docker image (`clauntainer:<flavor>`), allowing multiple environments to coexist.
 
 ### Connecting to the Container
 

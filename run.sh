@@ -94,6 +94,7 @@ CONTAINER_NAME="${CONTAINER_NAME:-}"
 AUTO_SSH="${AUTO_SSH:-true}"  # Automatically SSH into tmux session after starting
 USE_WORKTREE="${USE_WORKTREE:-false}"  # Create and mount a git worktree
 WORKTREE_BRANCH="${WORKTREE_BRANCH:-}"  # Optional branch name for worktree
+FLAVOR="${FLAVOR:-}"  # Dockerfile flavor (e.g., flutter, python)
 
 # Parse command line arguments
 show_usage() {
@@ -119,6 +120,7 @@ Options:
     -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_clauntainer.pub)
     -w, --workspace PATH    Path to mount as workspace (optional, default: container-internal only)
     -W, --worktree [NAME]   Create git worktree in .worktrees/ and mount it (optionally specify branch/name)
+    -F, --flavor NAME       Dockerfile flavor to use (e.g., flutter, python) - uses Dockerfile.NAME
     --no-ssh                Don't automatically SSH into the container (default: auto-connect)
     -h, --help              Show this help message
 
@@ -135,6 +137,9 @@ Examples:
 
     # Use git worktree with specific branch name
     cd ~/code/myproject && clauntainer -W feature-branch -c
+
+    # Use a Dockerfile flavor (e.g., Dockerfile.flutter)
+    cd ~/flutter-project && clauntainer -c -F flutter
 
     # Run multiple containers in parallel (auto-assigns ports)
     cd ~/project1 && clauntainer -c
@@ -212,6 +217,10 @@ while [[ $# -gt 0 ]]; do
             else
                 shift
             fi
+            ;;
+        -F|--flavor)
+            FLAVOR="$2"
+            shift 2
             ;;
         --no-ssh)
             AUTO_SSH="false"
@@ -384,14 +393,30 @@ if [ "$START_CLAUDE" = "true" ]; then
 fi
 echo ""
 
+# Determine Dockerfile and image tag based on flavor
+if [ -n "$FLAVOR" ]; then
+    DOCKERFILE="Dockerfile.$FLAVOR"
+    IMAGE_TAG="clauntainer:$FLAVOR"
+else
+    DOCKERFILE="Dockerfile"
+    IMAGE_TAG="clauntainer:latest"
+fi
+
 # Build image if it doesn't exist
-if ! docker image inspect clauntainer:latest >/dev/null 2>&1; then
-    echo "Building clauntainer image..."
+if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+    echo "Building $IMAGE_TAG image..."
     cd "$SCRIPT_DIR" || {
         echo "ERROR: Failed to change to script directory: $SCRIPT_DIR"
         exit 1
     }
-    docker build -t clauntainer:latest \
+
+    # Check if Dockerfile exists
+    if [ ! -f "$DOCKERFILE" ]; then
+        echo "ERROR: $DOCKERFILE not found in $SCRIPT_DIR"
+        exit 1
+    fi
+
+    docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" \
         --build-arg CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}" \
         --build-arg TZ="${TZ:-UTC}" \
         .
@@ -424,13 +449,14 @@ export SKIP_PERMISSIONS
 export GITHUB_TOKEN
 export GIT_USER_NAME
 export GIT_USER_EMAIL
+export IMAGE_TAG  # Image tag to use (includes flavor)
 
 # Generate compose file on-the-fly
 COMPOSE_FILE="/tmp/clauntainer-$CONTAINER_NAME.yaml"
 cat > "$COMPOSE_FILE" <<'EOF'
 services:
   clauntainer:
-    image: clauntainer:latest
+    image: ${IMAGE_TAG:-clauntainer:latest}
     container_name: ${CONTAINER_NAME:-clauntainer}
     hostname: ${CONTAINER_NAME:-clauntainer}
     ports:
