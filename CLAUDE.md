@@ -11,7 +11,7 @@ This repository contains a Docker-based secure development environment for Claud
 ### Container Workspace Isolation
 
 **Default behavior**: The container workspace is separate from the host directory:
-- When you run `clauntainer` from a git repo, it auto-detects the origin URL and **clones** it into the container
+- When you run `den` from a git repo, it auto-detects the origin URL and **clones** it into the container
 - Each container gets its own isolated workspace at `/workspace` inside the container
 - Multiple containers can run in parallel, each with their own isolated workspaces
 
@@ -39,8 +39,8 @@ For private GitHub repositories, use a GitHub Personal Access Token:
 # Set the token
 export GITHUB_TOKEN=ghp_yourTokenHere
 
-# Then run clauntainer
-cd ~/my-private-repo && clauntainer -c
+# Then run den
+cd ~/my-private-repo && den -c
 ```
 
 **How it works:**
@@ -145,12 +145,12 @@ cd ~/flutter-project && ./run.sh -c -F flutter
 
 ### Dockerfile Flavors
 
-Clauntainer supports multiple Dockerfile variants for different project requirements using the `-F` or `--flavor` flag:
+Den supports multiple Dockerfile variants for different project requirements using the `-F` or `--flavor` flag:
 
 **Creating a flavor:**
 1. Create a new Dockerfile with the pattern `Dockerfile.<flavor-name>` (e.g., `Dockerfile.flutter`)
 2. Base it on the main `Dockerfile` or customize as needed
-3. Use it with: `clauntainer -c -F <flavor-name>`
+3. Use it with: `den -c -F <flavor-name>`
 
 **Built-in flavors:**
 - `flutter` - Includes Flutter SDK for mobile app development (Dockerfile.flutter)
@@ -162,10 +162,10 @@ cp Dockerfile Dockerfile.python
 # Add Python-specific tools to Dockerfile.python
 
 # Use the Python flavor
-cd ~/my-python-project && clauntainer -c -F python
+cd ~/my-python-project && den -c -F python
 ```
 
-Each flavor builds and uses a separate Docker image (`clauntainer:<flavor>`), allowing multiple environments to coexist.
+Each flavor builds and uses a separate Docker image (`den:<flavor>`), allowing multiple environments to coexist.
 
 ### Connecting to the Container
 
@@ -214,18 +214,18 @@ Or use raw docker commands:
 
 ```bash
 # Build image
-docker build -t clauntainer .
+docker build -t den .
 
 # Run with SSH access
 docker run -d \
-  --name clauntainer \
+  --name den \
   --cap-add NET_ADMIN \
   -p 2222:22 \
   -v ~/.ssh/id_rsa.pub:/home/node/.ssh/authorized_keys:ro \
   -v ~/.claude:/home/node/.claude \
   -e REPO_URL=https://github.com/user/repo \
   -e START_CLAUDE=true \
-  clauntainer
+  den
 ```
 
 ## Security Considerations

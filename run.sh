@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Clauntainer - Secure Claude Code Container Launcher
+# Den - Secure Claude Code Container Launcher
 # Usage: ./run.sh [OPTIONS]
 
 set -euo pipefail
@@ -21,46 +21,46 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 # Check for subcommands first
 case "${1:-}" in
     stop)
-        CONTAINER_NAME="${2:-clauntainer}"
+        CONTAINER_NAME="${2:-den}"
         echo "Stopping $CONTAINER_NAME..."
         docker stop "$CONTAINER_NAME" && docker rm "$CONTAINER_NAME"
         echo "Container stopped and removed"
         exit 0
         ;;
     logs)
-        CONTAINER_NAME="${2:-clauntainer}"
+        CONTAINER_NAME="${2:-den}"
         echo "Showing logs for $CONTAINER_NAME (Ctrl+C to exit)..."
         docker logs -f "$CONTAINER_NAME"
         exit 0
         ;;
     restart)
-        CONTAINER_NAME="${2:-clauntainer}"
+        CONTAINER_NAME="${2:-den}"
         echo "Restarting $CONTAINER_NAME..."
         docker restart "$CONTAINER_NAME"
         echo "Container restarted"
         exit 0
         ;;
     ssh)
-        CONTAINER_NAME="${2:-clauntainer}"
+        CONTAINER_NAME="${2:-den}"
         # Get the actual port
         SSH_PORT=$(docker port "$CONTAINER_NAME" 22 2>/dev/null | cut -d: -f2)
         if [ -z "$SSH_PORT" ]; then
             echo "ERROR: Container $CONTAINER_NAME is not running or port not found"
-            echo "Run 'clauntainer list' to see running containers"
+            echo "Run 'den list' to see running containers"
             exit 1
         fi
         # Connect with optional tmux attachment
         if [ "${3:-}" = "-t" ] || [ "${3:-}" = "--tmux" ]; then
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT (attaching to tmux)..."
-            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude
         else
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT..."
-            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost
+            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost
         fi
         ;;
     list|ps)
-        echo "Running Clauntainers:"
-        docker ps --filter "ancestor=clauntainer:latest" --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}\t{{.CreatedAt}}"
+        echo "Running Dens:"
+        docker ps --filter "ancestor=den:latest" --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}\t{{.CreatedAt}}"
         exit 0
         ;;
 esac
@@ -87,7 +87,7 @@ REPO_DIR="${REPO_DIR:-/workspace/repo}"
 INIT_FIREWALL="${INIT_FIREWALL:-false}"
 START_CLAUDE="${START_CLAUDE:-true}"
 SKIP_PERMISSIONS="${SKIP_PERMISSIONS:-false}"
-SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519_clauntainer.pub}"
+SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519_den.pub}"
 CLAUDE_CONFIG="${CLAUDE_CONFIG:-$HOME/.claude}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-}"  # No default - only mount if explicitly specified
 CONTAINER_NAME="${CONTAINER_NAME:-}"
@@ -99,15 +99,15 @@ FLAVOR="${FLAVOR:-}"  # Dockerfile flavor (e.g., flutter, python)
 # Parse command line arguments
 show_usage() {
     cat <<EOF
-Clauntainer - Secure Claude Code Container Launcher
+Den - Secure Claude Code Container Launcher
 
 Usage:
-    clauntainer [OPTIONS]              Start a new container
-    clauntainer ssh [NAME] [-t]        SSH into a container (-t for tmux)
-    clauntainer stop [NAME]            Stop and remove a container
-    clauntainer logs [NAME]            View container logs
-    clauntainer restart [NAME]         Restart a container
-    clauntainer list                   List all running clauntainers
+    den [OPTIONS]              Start a new container
+    den ssh [NAME] [-t]        SSH into a container (-t for tmux)
+    den stop [NAME]            Stop and remove a container
+    den logs [NAME]            View container logs
+    den restart [NAME]         Restart a container
+    den list                   List all running dens
 
 Options:
     -r, --repo URL          Repository URL to clone
@@ -117,7 +117,7 @@ Options:
     -f, --firewall          Initialize firewall on startup
     -c, --claude            Auto-start Claude Code in tmux
     -s, --skip-perms        Use --dangerously-skip-permissions flag
-    -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_clauntainer.pub)
+    -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_den.pub)
     -w, --workspace PATH    Path to mount as workspace (optional, default: container-internal only)
     -W, --worktree [NAME]   Create git worktree in .worktrees/ and mount it (optionally specify branch/name)
     -F, --flavor NAME       Dockerfile flavor to use (e.g., flutter, python) - uses Dockerfile.NAME
@@ -130,32 +130,32 @@ Environment Variables:
 
 Examples:
     # From any git repo - auto-assigns port and name
-    cd ~/code/myproject && clauntainer -c
+    cd ~/code/myproject && den -c
 
     # Use git worktree (creates .worktrees/<name> and mounts it)
-    cd ~/code/myproject && clauntainer -W -c
+    cd ~/code/myproject && den -W -c
 
     # Use git worktree with specific branch name
-    cd ~/code/myproject && clauntainer -W feature-branch -c
+    cd ~/code/myproject && den -W feature-branch -c
 
     # Use a Dockerfile flavor (e.g., Dockerfile.flutter)
-    cd ~/flutter-project && clauntainer -c -F flutter
+    cd ~/flutter-project && den -c -F flutter
 
     # Run multiple containers in parallel (auto-assigns ports)
-    cd ~/project1 && clauntainer -c
-    cd ~/project2 && clauntainer -c
+    cd ~/project1 && den -c
+    cd ~/project2 && den -c
 
     # SSH into a container
-    clauntainer ssh clauntainer-myproject
+    den ssh den-myproject
 
     # SSH and attach to tmux/Claude Code session
-    clauntainer ssh clauntainer-myproject -t
+    den ssh den-myproject -t
 
     # List all running containers
-    clauntainer list
+    den list
 
     # Stop a specific container
-    clauntainer stop clauntainer-myproject
+    den stop den-myproject
 
 After starting, connect via:
     ssh -p $SSH_PORT node@localhost
@@ -366,16 +366,16 @@ if [ -z "$CONTAINER_NAME" ]; then
     if [ -n "$REPO_URL" ]; then
         # Extract repo name from URL
         REPO_NAME=$(basename "$REPO_URL" .git | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
-        CONTAINER_NAME="clauntainer-${REPO_NAME}"
+        CONTAINER_NAME="den-${REPO_NAME}"
     else
         # Use current directory name
         DIR_NAME=$(basename "$USER_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
-        CONTAINER_NAME="clauntainer-${DIR_NAME}"
+        CONTAINER_NAME="den-${DIR_NAME}"
     fi
     echo "Auto-generated container name: $CONTAINER_NAME"
 fi
 
-echo "Starting Clauntainer..."
+echo "Starting Den..."
 echo "  Container Name: $CONTAINER_NAME"
 echo "  SSH Port: $SSH_PORT"
 echo "  SSH Key: $SSH_PUBLIC_KEY"
@@ -396,10 +396,10 @@ echo ""
 # Determine Dockerfile and image tag based on flavor
 if [ -n "$FLAVOR" ]; then
     DOCKERFILE="Dockerfile.$FLAVOR"
-    IMAGE_TAG="clauntainer:$FLAVOR"
+    IMAGE_TAG="den:$FLAVOR"
 else
     DOCKERFILE="Dockerfile"
-    IMAGE_TAG="clauntainer:latest"
+    IMAGE_TAG="den:latest"
 fi
 
 # Build image if it doesn't exist
@@ -452,13 +452,13 @@ export GIT_USER_EMAIL
 export IMAGE_TAG  # Image tag to use (includes flavor)
 
 # Generate compose file on-the-fly
-COMPOSE_FILE="/tmp/clauntainer-$CONTAINER_NAME.yaml"
+COMPOSE_FILE="/tmp/den-$CONTAINER_NAME.yaml"
 cat > "$COMPOSE_FILE" <<'EOF'
 services:
-  clauntainer:
-    image: ${IMAGE_TAG:-clauntainer:latest}
-    container_name: ${CONTAINER_NAME:-clauntainer}
-    hostname: ${CONTAINER_NAME:-clauntainer}
+  den:
+    image: ${IMAGE_TAG:-den:latest}
+    container_name: ${CONTAINER_NAME:-den}
+    hostname: ${CONTAINER_NAME:-den}
     ports:
       - "${SSH_PORT:-2222}:22"
     environment:
@@ -471,7 +471,7 @@ services:
       - GIT_USER_NAME=${GIT_USER_NAME:-}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-}
     volumes:
-      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro
+      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_den.pub}:/tmp/host_ssh_key.pub:ro
       - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
       - ${CLAUDE_JSON:-~/.claude.json}:/tmp/host_claude.json:ro
       - ${GIT_CONFIG:-~/.gitconfig}:/home/node/.gitconfig:ro
@@ -497,7 +497,7 @@ if [ -n "${PARENT_GIT_DIR:-}" ]; then
 fi
 
 # Use docker compose to start the container
-docker compose -p "clauntainer-$CONTAINER_NAME" -f "$COMPOSE_FILE" up -d
+docker compose -p "den-$CONTAINER_NAME" -f "$COMPOSE_FILE" up -d
 
 # Clean up temp compose file
 rm -f "$COMPOSE_FILE"
@@ -512,25 +512,25 @@ echo ""
 echo "Container started successfully!"
 echo ""
 echo "Connect via SSH:"
-echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_clauntainer node@localhost"
+echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost"
 echo ""
 if [ "$START_CLAUDE" = "true" ]; then
     echo "Claude Code is running in tmux session 'claude'"
     echo "Attach to it:"
-    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude"
+    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude"
     echo ""
 fi
 echo "Emacs TRAMP connection string:"
 echo "  /ssh:node@localhost#$SSH_PORT:$REPO_DIR"
 echo ""
 echo "View logs:"
-echo "  clauntainer logs $CONTAINER_NAME"
+echo "  den logs $CONTAINER_NAME"
 echo ""
 echo "Stop container:"
-echo "  clauntainer stop $CONTAINER_NAME"
+echo "  den stop $CONTAINER_NAME"
 echo ""
 echo "List all running containers:"
-echo "  clauntainer list"
+echo "  den list"
 echo ""
 
 # Auto-SSH into tmux session if enabled
@@ -541,7 +541,7 @@ if [ "$AUTO_SSH" = "true" ] && [ "$START_CLAUDE" = "true" ]; then
     MAX_RETRIES=30
     RETRY_COUNT=0
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer \
+        if ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den \
                -o ConnectTimeout=1 \
                -o StrictHostKeyChecking=no \
                -o UserKnownHostsFile=/dev/null \
@@ -556,9 +556,9 @@ if [ "$AUTO_SSH" = "true" ] && [ "$START_CLAUDE" = "true" ]; then
 
     if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
         echo "WARNING: SSH didn't become ready in time. You can connect manually with:"
-        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude"
+        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude"
     else
         echo "Connecting to tmux session..."
-        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_clauntainer node@localhost -t tmux attach -t claude
+        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude
     fi
 fi

@@ -1,13 +1,13 @@
 services:
-  clauntainer:
+  den:
     build:
       context: .
       args:
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
         TZ: ${TZ:-UTC}
-    image: clauntainer:latest
-    container_name: ${CONTAINER_NAME:-clauntainer}
-    hostname: ${CONTAINER_NAME:-clauntainer}
+    image: den:latest
+    container_name: ${CONTAINER_NAME:-den}
+    hostname: ${CONTAINER_NAME:-den}
     ports:
       - "${SSH_PORT:-2222}:22"
     environment:
@@ -28,7 +28,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     volumes:
       # Mount SSH public key to temp location for copying
-      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_clauntainer.pub}:/tmp/host_ssh_key.pub:ro
+      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_den.pub}:/tmp/host_ssh_key.pub:ro
       # Mount Claude config directory to temp location for copying
       - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
       # Mount Claude settings file to temp location for copying

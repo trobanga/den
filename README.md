@@ -1,4 +1,4 @@
-# Clauntainer
+# Den
 
 A secure, isolated Docker container for running Claude Code with network restrictions and SSH access. Perfect for safely testing Claude Code on untrusted repositories or working in a sandboxed environment.
 
@@ -179,10 +179,10 @@ Files:
 docker compose ps
 
 # Check SSH service
-docker compose exec clauntainer ps aux | grep sshd
+docker compose exec den ps aux | grep sshd
 
 # Verify your public key is mounted
-docker compose exec clauntainer cat /home/node/.ssh/authorized_keys
+docker compose exec den cat /home/node/.ssh/authorized_keys
 ```
 
 ### Claude Code isn't running
