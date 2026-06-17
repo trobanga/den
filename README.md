@@ -46,6 +46,40 @@ This will:
 ./run.sh -r ""
 ```
 
+## Git Authentication
+
+Den automatically configures git authentication for push/pull operations using your host credentials:
+
+### Method 1: Git Credentials (HTTPS) - Auto-detected ✅
+
+If you have `~/.git-credentials` on your host, it's automatically mounted and configured:
+
+```bash
+# No extra setup needed - just use den
+cd ~/my-repo && ./run.sh -c
+```
+
+### Method 2: SSH Keys - Auto-detected ✅
+
+If you have SSH keys in `~/.ssh` (id_rsa, id_ed25519, etc.), they're automatically copied to the container:
+
+```bash
+# No extra setup needed - works with git@github.com:user/repo.git URLs
+cd ~/my-repo && ./run.sh -c
+```
+
+### Method 3: GitHub Token (Fallback)
+
+For private repositories without git-credentials or SSH keys:
+
+```bash
+# Create token at https://github.com/settings/tokens (repo scope required)
+export GITHUB_TOKEN=ghp_yourTokenHere
+cd ~/my-private-repo && ./run.sh -c
+```
+
+All three methods work simultaneously - den uses whatever you have configured.
+
 ## Connecting to the Container
 
 ### Via SSH
@@ -156,8 +190,8 @@ The optional firewall restricts outbound network access to a whitelist of approv
 ## Architecture
 
 The container uses:
-- **Base image:** Node.js 20 on Debian
-- **User:** Non-root `node` user (UID 1000)
+- **Base image:** `debian:bookworm-slim` (Claude Code installed via official apt repo)
+- **User:** Non-root `node` user (UID matches host via `HOST_UID` build arg, default 1000)
 - **SSH:** OpenSSH with key-based auth only
 - **Shell:** zsh with oh-my-zsh and powerlevel10k
 - **Firewall:** iptables + ipset for IP-based whitelisting

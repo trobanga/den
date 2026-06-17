@@ -1,56 +1,82 @@
-FROM node:20
+FROM debian:bookworm-slim
 
 ARG TZ
 ENV TZ="$TZ"
 
+ARG HOST_UID=1000
+# CLAUDE_CODE_VERSION kept for compatibility with run.sh; apt repo always installs latest.
 ARG CLAUDE_CODE_VERSION=latest
-ARG FLUTTER_VERSION=stable
 
-# Install basic development tools and iptables/ipset
+# Use C.UTF-8 (built into glibc, no locale-gen needed)
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dev tools, network filtering tools, and Claude Code (apt repo, signed).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  less \
-  git \
-  procps \
-  sudo \
-  fzf \
-  zsh \
-  man-db \
-  unzip \
-  gnupg2 \
-  gh \
-  iptables \
-  ipset \
-  iproute2 \
-  dnsutils \
-  aggregate \
-  jq \
-  nano \
-  vim \
-  openssh-server \
-  tmux \
-  rsyslog \
-  ncurses-term \
-  curl \
-  xz-utils \
-  libglu1-mesa \
-  clang \
-  cmake \
-  ninja-build \
-  pkg-config \
-  libgtk-3-dev \
+    ca-certificates \
+    curl \
+    wget \
+    gnupg2 \
+    less \
+    git \
+    procps \
+    sudo \
+    fzf \
+    zsh \
+    man-db \
+    unzip \
+    gh \
+    iptables \
+    ipset \
+    iproute2 \
+    dnsutils \
+    aggregate \
+    jq \
+    nano \
+    vim \
+    openssh-server \
+    tmux \
+    rsyslog \
+    ncurses-term \
+  && install -d -m 0755 /etc/apt/keyrings \
+  && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
+       -o /etc/apt/keyrings/claude-code.asc \
+  && echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/latest latest main" \
+       > /etc/apt/sources.list.d/claude-code.list \
+  && apt-get update && apt-get install -y --no-install-recommends claude-code \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Ensure default node user has access to /usr/local/share
-RUN mkdir -p /usr/local/share/npm-global && \
-  chown -R node:node /usr/local/share
+# Install bun and pi.dev coding agent (alternative to Claude Code).
+RUN ARCH=$(dpkg --print-architecture) && \
+  case "$ARCH" in \
+    amd64) BUN_ARCH=x64 ;; \
+    arm64) BUN_ARCH=aarch64 ;; \
+    *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+  esac && \
+  curl -fsSL "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-${BUN_ARCH}.zip" -o /tmp/bun.zip && \
+  unzip -q /tmp/bun.zip -d /tmp/bun && \
+  mv "/tmp/bun/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun && \
+  chmod +x /usr/local/bin/bun && \
+  rm -rf /tmp/bun /tmp/bun.zip && \
+  BUN_INSTALL=/usr/local bun add -g @earendil-works/pi-coding-agent
 
-ARG USERNAME=node
+# Install Go 1.25.1
+ARG GO_VERSION=1.25.1
+RUN ARCH=$(dpkg --print-architecture) && \
+  GO_ARCH=$([ "$ARCH" = "amd64" ] && echo "amd64" || echo "arm64") && \
+  wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" && \
+  tar -C /usr/local -xzf "go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" && \
+  rm "go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+
+ENV PATH=$PATH:/usr/local/go/bin
+
+# Create node user with HOST_UID so volume mounts share ownership with the host.
+RUN useradd -m -u ${HOST_UID} -s /bin/zsh node
 
 # Persist bash history.
-RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  && mkdir /commandhistory \
+RUN mkdir /commandhistory \
   && touch /commandhistory/.bash_history \
-  && chown -R $USERNAME /commandhistory
+  && chown -R node:node /commandhistory
 
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
@@ -64,19 +90,11 @@ WORKDIR /workspace
 ARG GIT_DELTA_VERSION=0.18.2
 RUN ARCH=$(dpkg --print-architecture) && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
-  sudo dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
+  dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
 
 # Set up non-root user
 USER node
-
-# Install global packages
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH=$PATH:/usr/local/share/npm-global/bin
-
-# Add npm-global bin to PATH for SSH login shells (bash/sh)
-RUN echo 'export PATH="/usr/local/share/npm-global/bin:$PATH"' >> /home/node/.profile && \
-    echo 'export PATH="/usr/local/share/npm-global/bin:$PATH"' >> /home/node/.bashrc
 
 # Set the default shell to zsh rather than sh
 ENV SHELL=/bin/zsh
@@ -93,42 +111,8 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
   -a "source /usr/share/doc/fzf/examples/completion.zsh" \
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  -a 'export PATH="/usr/local/share/npm-global/bin:$PATH"' \
+  -a 'export PATH="$PATH:/usr/local/go/bin"' \
   -x
-
-# Install Claude
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
-
-# Install bun and pi.dev coding agent (alternative to Claude Code).
-# Needs root: installs into /usr/local/bin.
-USER root
-RUN ARCH=$(dpkg --print-architecture) && \
-  case "$ARCH" in \
-    amd64) BUN_ARCH=x64 ;; \
-    arm64) BUN_ARCH=aarch64 ;; \
-    *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
-  esac && \
-  curl -fsSL "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-${BUN_ARCH}.zip" -o /tmp/bun.zip && \
-  unzip -q /tmp/bun.zip -d /tmp/bun && \
-  mv "/tmp/bun/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun && \
-  chmod +x /usr/local/bin/bun && \
-  rm -rf /tmp/bun /tmp/bun.zip && \
-  BUN_INSTALL=/usr/local bun add -g @earendil-works/pi-coding-agent
-
-# Install Flutter SDK
-USER root
-RUN mkdir -p /opt/flutter && chown node:node /opt/flutter
-USER node
-RUN cd /opt/flutter && \
-    git clone https://github.com/flutter/flutter.git -b ${FLUTTER_VERSION} --depth 1 . && \
-    /opt/flutter/bin/flutter --version && \
-    /opt/flutter/bin/flutter config --no-analytics
-
-# Add Flutter to PATH
-ENV PATH="/opt/flutter/bin:${PATH}"
-RUN echo 'export PATH="/opt/flutter/bin:$PATH"' >> /home/node/.profile && \
-    echo 'export PATH="/opt/flutter/bin:$PATH"' >> /home/node/.bashrc && \
-    echo 'export PATH="/opt/flutter/bin:$PATH"' >> /home/node/.zshrc
 
 # Copy and set up firewall script
 COPY init-firewall.sh /usr/local/bin/
@@ -153,6 +137,7 @@ RUN mkdir -p /run/sshd && \
   sed -i 's/UsePAM yes/UsePAM no/' /etc/ssh/sshd_config && \
   sed -i 's/#LogLevel INFO/LogLevel VERBOSE/' /etc/ssh/sshd_config && \
   sed -i 's|#AuthorizedKeysFile.*|AuthorizedKeysFile /home/%u/.ssh/authorized_keys|' /etc/ssh/sshd_config && \
+  sed -i 's/^AcceptEnv/#AcceptEnv/' /etc/ssh/sshd_config && \
   echo "AllowUsers node" >> /etc/ssh/sshd_config
 
 # Set up SSH for node user and unlock account for SSH access

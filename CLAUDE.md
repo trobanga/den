@@ -20,34 +20,52 @@ This repository contains a Docker-based secure development environment for Claud
 - Mounts the worktree to `/workspace` in the container
 - Changes in the container are immediately reflected on your host filesystem
 - Useful for working on the same repo in multiple branches simultaneously
-- Each worktree is based on your current branch
+- New branches are based on `origin/main` (or `origin/master` if main doesn't exist)
+- If you specify an existing branch name, it checks out that branch in the worktree
 
 **Why separate workspaces by default?**
 - Keeps your host filesystem clean and isolated from container operations
 - Prevents accidental modification of host files from within the container
 - Each container is a fresh, reproducible environment
 
-### Private Repository Authentication
+### Git Authentication for Push/Pull
 
-For private GitHub repositories, use a GitHub Personal Access Token:
+Den supports multiple authentication methods for git operations (clone, push, pull). The methods are automatically detected and configured:
 
-**Setup:**
+**Method 1: Git Credentials File (Recommended for HTTPS)**
+```bash
+# If you have ~/.git-credentials on your host, it will be automatically mounted
+# Format: https://username:token@github.com
+# Den auto-detects and mounts it read-only if it exists
+cd ~/my-repo && den -c
+```
+
+**Method 2: SSH Keys (Recommended for SSH URLs)**
+```bash
+# If you have SSH keys in ~/.ssh, they will be automatically mounted
+# Den copies private keys (id_rsa, id_ed25519, etc.) to the container
+# Works with git@github.com:user/repo.git style URLs
+cd ~/my-repo && den -c
+```
+
+**Method 3: GitHub Token (Fallback)**
 ```bash
 # Create a token at: https://github.com/settings/tokens
 # Required scopes: repo (full control of private repositories)
 
-# Set the token
 export GITHUB_TOKEN=ghp_yourTokenHere
-
-# Then run den
 cd ~/my-private-repo && den -c
+
+# This method rewrites HTTPS URLs to inject the token
+# Works for both clone and push/pull operations
 ```
 
 **How it works:**
-- Token is passed to the container as an environment variable
-- Git credential helper automatically uses it for HTTPS cloning
-- No SSH keys needed
-- Works with both public and private repositories
+- **Git credentials**: Mounted read-only and configured with `credential.helper store`
+- **SSH keys**: Copied from `~/.ssh` (excluding `*_den` keys) with proper permissions
+- **GitHub token**: Rewrites `https://github.com/` to `https://git:TOKEN@github.com/`
+- All methods work simultaneously - den uses whatever you have configured
+- Priority: SSH keys for SSH URLs, git-credentials for HTTPS, GITHUB_TOKEN as fallback
 
 ## Architecture
 
@@ -107,12 +125,12 @@ GitHub IP ranges are aggregated using the `aggregate` tool to minimize ipset ent
 
 ## Container Configuration
 
-- **User**: Non-root `node` user (UID 1000)
+- **Base image**: `debian:bookworm-slim`
+- **User**: Non-root `node` user (UID matches host via `HOST_UID` build arg, default 1000)
 - **Workdir**: `/workspace`
 - **Shell**: zsh with oh-my-zsh and p10k theme
 - **Editor**: nano (EDITOR and VISUAL env vars)
-- **Node Version**: 20
-- **Claude Code**: Installed globally, version controlled via build arg
+- **Claude Code**: Installed via official apt repo (signed); Node.js pulled in as dependency
 
 ## Usage
 
@@ -147,13 +165,29 @@ cd ~/flutter-project && ./run.sh -c -F flutter
 
 Den supports multiple Dockerfile variants for different project requirements using the `-F` or `--flavor` flag:
 
+**Auto-detection:**
+Den automatically detects your project type and selects the appropriate flavor:
+- Detects Flutter projects by checking for `pubspec.yaml` with flutter dependency
+- Detects Go projects by checking for `go.mod`
+- Detects Rust projects by checking for `Cargo.toml`
+- More detection rules can be added for other project types
+
+You can override auto-detection with explicit `-F` flag.
+
 **Creating a flavor:**
 1. Create a new Dockerfile with the pattern `Dockerfile.<flavor-name>` (e.g., `Dockerfile.flutter`)
 2. Base it on the main `Dockerfile` or customize as needed
-3. Use it with: `den -c -F <flavor-name>`
+3. Add detection logic in `detect_flavor()` function in `run.sh` (optional)
+4. Use it with: `den -c -F <flavor-name>` or let it auto-detect
 
 **Built-in flavors:**
 - `flutter` - Includes Flutter SDK for mobile app development (Dockerfile.flutter)
+  - Auto-detected from `pubspec.yaml` with flutter dependency
+- `go` - Includes Go toolchain and development tools (Dockerfile.go)
+  - Auto-detected from `go.mod`
+- `rust` - Rust toolchain (rustup stable) with `sccache` configured as `RUSTC_WRAPPER` (Dockerfile.rust)
+  - Auto-detected from `Cargo.toml`
+  - Auto-mounts the host's `~/.cache/sccache` (override via `SCCACHE_DIR` env var) read-write so cargo builds reuse the host's compilation cache across throwaway containers
 
 **Example custom flavor:**
 ```bash
@@ -161,7 +195,16 @@ Den supports multiple Dockerfile variants for different project requirements usi
 cp Dockerfile Dockerfile.python
 # Add Python-specific tools to Dockerfile.python
 
-# Use the Python flavor
+# Add detection in run.sh detect_flavor() function:
+# if [ -f "$dir/requirements.txt" ]; then
+#     echo "python"
+#     return
+# fi
+
+# Use automatically (if in a Python project directory)
+cd ~/my-python-project && den -c
+
+# Or use explicitly
 cd ~/my-python-project && den -c -F python
 ```
 

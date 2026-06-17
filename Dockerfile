@@ -1,47 +1,73 @@
-FROM node:20
+FROM debian:bookworm-slim
 
 ARG TZ
 ENV TZ="$TZ"
 
+ARG HOST_UID=1000
+# CLAUDE_CODE_VERSION kept for compatibility with run.sh; apt repo always installs latest.
 ARG CLAUDE_CODE_VERSION=latest
 
-# Install basic development tools and iptables/ipset
+# Use C.UTF-8 (built into glibc, no locale-gen needed)
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dev tools, network filtering tools, and Claude Code (apt repo, signed).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  less \
-  git \
-  procps \
-  sudo \
-  fzf \
-  zsh \
-  man-db \
-  unzip \
-  gnupg2 \
-  gh \
-  iptables \
-  ipset \
-  iproute2 \
-  dnsutils \
-  aggregate \
-  jq \
-  nano \
-  vim \
-  openssh-server \
-  tmux \
-  rsyslog \
-  ncurses-term \
+    ca-certificates \
+    curl \
+    wget \
+    gnupg2 \
+    less \
+    git \
+    procps \
+    sudo \
+    fzf \
+    zsh \
+    man-db \
+    unzip \
+    gh \
+    iptables \
+    ipset \
+    iproute2 \
+    dnsutils \
+    aggregate \
+    jq \
+    nano \
+    vim \
+    openssh-server \
+    tmux \
+    rsyslog \
+    ncurses-term \
+  && install -d -m 0755 /etc/apt/keyrings \
+  && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
+       -o /etc/apt/keyrings/claude-code.asc \
+  && echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/latest latest main" \
+       > /etc/apt/sources.list.d/claude-code.list \
+  && apt-get update && apt-get install -y --no-install-recommends claude-code \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Ensure default node user has access to /usr/local/share
-RUN mkdir -p /usr/local/share/npm-global && \
-  chown -R node:node /usr/local/share
+# Install bun and pi.dev coding agent (alternative to Claude Code).
+# Bun globals land in /usr/local/bin via BUN_INSTALL prefix.
+RUN ARCH=$(dpkg --print-architecture) && \
+  case "$ARCH" in \
+    amd64) BUN_ARCH=x64 ;; \
+    arm64) BUN_ARCH=aarch64 ;; \
+    *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+  esac && \
+  curl -fsSL "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-${BUN_ARCH}.zip" -o /tmp/bun.zip && \
+  unzip -q /tmp/bun.zip -d /tmp/bun && \
+  mv "/tmp/bun/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun && \
+  chmod +x /usr/local/bin/bun && \
+  rm -rf /tmp/bun /tmp/bun.zip && \
+  BUN_INSTALL=/usr/local bun add -g @earendil-works/pi-coding-agent
 
-ARG USERNAME=node
+# Create node user with HOST_UID so volume mounts share ownership with the host.
+RUN useradd -m -u ${HOST_UID} -s /bin/zsh node
 
 # Persist bash history.
-RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  && mkdir /commandhistory \
+RUN mkdir /commandhistory \
   && touch /commandhistory/.bash_history \
-  && chown -R $USERNAME /commandhistory
+  && chown -R node:node /commandhistory
 
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
@@ -55,19 +81,11 @@ WORKDIR /workspace
 ARG GIT_DELTA_VERSION=0.18.2
 RUN ARCH=$(dpkg --print-architecture) && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
-  sudo dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
+  dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
 
 # Set up non-root user
 USER node
-
-# Install global packages
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH=$PATH:/usr/local/share/npm-global/bin
-
-# Add npm-global bin to PATH for SSH login shells (bash/sh)
-RUN echo 'export PATH="/usr/local/share/npm-global/bin:$PATH"' >> /home/node/.profile && \
-    echo 'export PATH="/usr/local/share/npm-global/bin:$PATH"' >> /home/node/.bashrc
 
 # Set the default shell to zsh rather than sh
 ENV SHELL=/bin/zsh
@@ -84,12 +102,7 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
   -a "source /usr/share/doc/fzf/examples/completion.zsh" \
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  -a 'export PATH="/usr/local/share/npm-global/bin:$PATH"' \
   -x
-
-# Install Claude
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
-
 
 # Copy and set up firewall script
 COPY init-firewall.sh /usr/local/bin/
@@ -114,6 +127,7 @@ RUN mkdir -p /run/sshd && \
   sed -i 's/UsePAM yes/UsePAM no/' /etc/ssh/sshd_config && \
   sed -i 's/#LogLevel INFO/LogLevel VERBOSE/' /etc/ssh/sshd_config && \
   sed -i 's|#AuthorizedKeysFile.*|AuthorizedKeysFile /home/%u/.ssh/authorized_keys|' /etc/ssh/sshd_config && \
+  sed -i 's/^AcceptEnv/#AcceptEnv/' /etc/ssh/sshd_config && \
   echo "AllowUsers node" >> /etc/ssh/sshd_config
 
 # Set up SSH for node user and unlock account for SSH access

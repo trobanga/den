@@ -52,7 +52,7 @@ case "${1:-}" in
         # Connect with optional tmux attachment
         if [ "${3:-}" = "-t" ] || [ "${3:-}" = "--tmux" ]; then
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT (attaching to tmux)..."
-            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude
+            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t 'tmux attach -t pi 2>/dev/null || tmux attach -t claude'
         else
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT..."
             exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost
@@ -86,9 +86,12 @@ REPO_URL="${REPO_URL:-}"
 REPO_DIR="${REPO_DIR:-/workspace/repo}"
 INIT_FIREWALL="${INIT_FIREWALL:-false}"
 START_CLAUDE="${START_CLAUDE:-true}"
+START_PI="${START_PI:-false}"
+PI_EXTRA_ARGS="${PI_EXTRA_ARGS:-}"
 SKIP_PERMISSIONS="${SKIP_PERMISSIONS:-false}"
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-$HOME/.ssh/id_ed25519_den.pub}"
 CLAUDE_CONFIG="${CLAUDE_CONFIG:-$HOME/.claude}"
+PI_CONFIG="${PI_CONFIG:-${PI_CODING_AGENT_DIR:-$HOME/.pi}}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-}"  # No default - only mount if explicitly specified
 CONTAINER_NAME="${CONTAINER_NAME:-}"
 AUTO_SSH="${AUTO_SSH:-true}"  # Automatically SSH into tmux session after starting
@@ -115,14 +118,20 @@ Options:
     -p, --port PORT         SSH port to expose (default: auto-assigned)
     -n, --name NAME         Container name (default: auto-generated from repo)
     -f, --firewall          Initialize firewall on startup
-    -c, --claude            Auto-start Claude Code in tmux
-    -s, --skip-perms        Use --dangerously-skip-permissions flag
+    -c, --claude            Auto-start Claude Code in tmux (default)
+    -P, --pi                Auto-start pi.dev coding agent in tmux (mutex with -c)
+    -s, --skip-perms        Use --dangerously-skip-permissions flag (Claude only)
     -k, --key PATH          Path to SSH public key (default: ~/.ssh/id_ed25519_den.pub)
     -w, --workspace PATH    Path to mount as workspace (optional, default: container-internal only)
     -W, --worktree [NAME]   Create git worktree in .worktrees/ and mount it (optionally specify branch/name)
-    -F, --flavor NAME       Dockerfile flavor to use (e.g., flutter, python) - uses Dockerfile.NAME
+    -F, --flavor NAME       Dockerfile flavor to use (e.g., flutter, python) - auto-detected by default
     --no-ssh                Don't automatically SSH into the container (default: auto-connect)
     -h, --help              Show this help message
+
+Pass-through:
+    Anything after `--` is forwarded verbatim to the agent (claude or pi). Example:
+        den -P -- -e ./my-extension.ts -e npm:@foo/pi-tools
+    Note: extension paths are resolved inside the container (e.g. /workspace/...).
 
 Environment Variables:
     CLAUDE_CODE_VERSION    Version of Claude Code to install (default: latest)
@@ -138,12 +147,21 @@ Examples:
     # Use git worktree with specific branch name
     cd ~/code/myproject && den -W feature-branch -c
 
-    # Use a Dockerfile flavor (e.g., Dockerfile.flutter)
+    # Auto-detect and use appropriate Dockerfile flavor (e.g., Flutter)
+    cd ~/flutter-project && den -c
+
+    # Or explicitly specify a flavor
     cd ~/flutter-project && den -c -F flutter
 
     # Run multiple containers in parallel (auto-assigns ports)
     cd ~/project1 && den -c
     cd ~/project2 && den -c
+
+    # Run pi.dev coding agent instead of Claude Code
+    cd ~/code/myproject && den -P
+
+    # Run pi with extensions (paths resolve inside container)
+    cd ~/code/myproject && den -P -- -e npm:@foo/pi-tools -e ./tools/my-ext.ts
 
     # SSH into a container
     den ssh den-myproject
@@ -167,6 +185,41 @@ After starting, connect via:
     /ssh:node@localhost#$SSH_PORT:/workspace/repo
 
 EOF
+}
+
+# Function to auto-detect project flavor
+detect_flavor() {
+    local dir="$1"
+
+    # Flutter/Dart - check for pubspec.yaml with flutter dependency
+    if [ -f "$dir/pubspec.yaml" ]; then
+        if grep -q "flutter:" "$dir/pubspec.yaml" 2>/dev/null; then
+            echo "flutter"
+            return
+        fi
+    fi
+
+    # Go - check for go.mod
+    if [ -f "$dir/go.mod" ]; then
+        echo "go"
+        return
+    fi
+
+    # Rust - check for Cargo.toml
+    if [ -f "$dir/Cargo.toml" ]; then
+        echo "rust"
+        return
+    fi
+
+    # Add more detections here as new flavors are added
+    # Python - pyproject.toml, setup.py, requirements.txt
+    # if [ -f "$dir/pyproject.toml" ] || [ -f "$dir/setup.py" ] || [ -f "$dir/requirements.txt" ]; then
+    #     echo "python"
+    #     return
+    # fi
+
+    # Default - no special flavor needed
+    echo ""
 }
 
 # Parse arguments
@@ -194,7 +247,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--claude)
             START_CLAUDE="true"
+            START_PI="false"
             shift
+            ;;
+        -P|--pi)
+            START_PI="true"
+            START_CLAUDE="false"
+            shift
+            ;;
+        --)
+            shift
+            PI_EXTRA_ARGS="$*"
+            break
             ;;
         -s|--skip-perms)
             SKIP_PERMISSIONS="true"
@@ -239,7 +303,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If no REPO_URL provided, check if current directory is a git repo
-if [ -z "$REPO_URL" ] && [ -d "$USER_DIR/.git" ]; then
+# Skip auto-clone if workspace is being mounted (user wants their exact state)
+# Skip in worktree mode too: it mounts a local worktree and needs no remote
+if [ -z "$REPO_URL" ] && [ -z "$WORKSPACE_DIR" ] && [ "$USE_WORKTREE" != "true" ] && [ -d "$USER_DIR/.git" ]; then
     echo "Detected git repository in current directory"
     REPO_URL=$(cd "$USER_DIR" && git remote get-url origin 2>/dev/null || echo "")
     if [ -n "$REPO_URL" ]; then
@@ -276,23 +342,40 @@ if [ "$USE_WORKTREE" = "true" ]; then
         exit 1
     fi
 
+    # Determine base branch for new branches (origin/main or origin/master)
+    BASE_BRANCH=""
+    if cd "$USER_DIR" && git rev-parse --verify origin/main >/dev/null 2>&1; then
+        BASE_BRANCH="origin/main"
+    elif cd "$USER_DIR" && git rev-parse --verify origin/master >/dev/null 2>&1; then
+        BASE_BRANCH="origin/master"
+    else
+        echo "WARNING: Could not find origin/main or origin/master, using HEAD as base"
+        BASE_BRANCH="HEAD"
+    fi
+
     # Determine branch to use for worktree
     if [ -n "${WORKTREE_BRANCH:-}" ]; then
         # User specified a branch name
         TARGET_BRANCH="$WORKTREE_BRANCH"
         WORKTREE_NAME="$WORKTREE_BRANCH"
     else
-        # Use current branch
-        TARGET_BRANCH=$(cd "$USER_DIR" && git rev-parse --abbrev-ref HEAD)
-        # Generate worktree name (use container name if set, otherwise use branch name with timestamp)
+        # Generate a new branch name with timestamp
+        CURRENT_BRANCH=$(cd "$USER_DIR" && git rev-parse --abbrev-ref HEAD)
         if [ -n "$CONTAINER_NAME" ]; then
+            TARGET_BRANCH="$CONTAINER_NAME"
             WORKTREE_NAME="$CONTAINER_NAME"
         else
-            WORKTREE_NAME="$TARGET_BRANCH-$(date +%s)"
+            # Use a generated name based on current branch or timestamp
+            if [ "$CURRENT_BRANCH" != "HEAD" ]; then
+                TARGET_BRANCH="$CURRENT_BRANCH-$(date +%s)"
+            else
+                TARGET_BRANCH="worktree-$(date +%s)"
+            fi
+            WORKTREE_NAME="$TARGET_BRANCH"
         fi
     fi
 
-    echo "Creating git worktree from branch: $TARGET_BRANCH"
+    echo "Creating git worktree: $TARGET_BRANCH"
 
     # Create .worktrees directory
     WORKTREES_DIR="$USER_DIR/.worktrees"
@@ -310,14 +393,15 @@ if [ "$USE_WORKTREE" = "true" ]; then
         # Check if branch exists
         if cd "$USER_DIR" && git rev-parse --verify "$TARGET_BRANCH" >/dev/null 2>&1; then
             # Branch exists, create worktree from it
+            echo "Branch '$TARGET_BRANCH' exists, checking it out in worktree"
             cd "$USER_DIR" && git worktree add "$WORKTREE_PATH" "$TARGET_BRANCH" || {
                 echo "ERROR: Failed to create git worktree"
                 exit 1
             }
         else
-            # Branch doesn't exist, create new branch and worktree
-            echo "Branch '$TARGET_BRANCH' doesn't exist, creating new branch from HEAD"
-            cd "$USER_DIR" && git worktree add -b "$TARGET_BRANCH" "$WORKTREE_PATH" || {
+            # Branch doesn't exist, create new branch and worktree from base branch
+            echo "Branch '$TARGET_BRANCH' doesn't exist, creating new branch from $BASE_BRANCH"
+            cd "$USER_DIR" && git worktree add -b "$TARGET_BRANCH" "$WORKTREE_PATH" "$BASE_BRANCH" || {
                 echo "ERROR: Failed to create git worktree with new branch"
                 exit 1
             }
@@ -375,6 +459,15 @@ if [ -z "$CONTAINER_NAME" ]; then
     echo "Auto-generated container name: $CONTAINER_NAME"
 fi
 
+# Auto-detect flavor if not explicitly set
+if [ -z "$FLAVOR" ]; then
+    DETECTED_FLAVOR=$(detect_flavor "$USER_DIR")
+    if [ -n "$DETECTED_FLAVOR" ]; then
+        FLAVOR="$DETECTED_FLAVOR"
+        echo "Auto-detected project type: $FLAVOR"
+    fi
+fi
+
 echo "Starting Den..."
 echo "  Container Name: $CONTAINER_NAME"
 echo "  SSH Port: $SSH_PORT"
@@ -386,10 +479,17 @@ if [ -n "$REPO_URL" ]; then
     echo "  Repository: $REPO_URL"
     echo "  Clone to: $REPO_DIR"
 fi
+if [ -n "$FLAVOR" ]; then
+    echo "  Dockerfile Flavor: $FLAVOR"
+fi
 echo "  Firewall: $INIT_FIREWALL"
 echo "  Auto-start Claude: $START_CLAUDE"
+echo "  Auto-start Pi: $START_PI"
 if [ "$START_CLAUDE" = "true" ]; then
     echo "  Skip Permissions: $SKIP_PERMISSIONS"
+fi
+if [ "$START_PI" = "true" ] && [ -n "$PI_EXTRA_ARGS" ]; then
+    echo "  Pi args: $PI_EXTRA_ARGS"
 fi
 echo ""
 
@@ -419,6 +519,7 @@ if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
     docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" \
         --build-arg CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}" \
         --build-arg TZ="${TZ:-UTC}" \
+        --build-arg HOST_UID="$(id -u)" \
         .
 fi
 
@@ -437,6 +538,8 @@ export SSH_PORT
 export SSH_PUBLIC_KEY
 export CLAUDE_CONFIG
 export GIT_CONFIG="$HOME/.gitconfig"
+export GIT_CREDENTIALS="$HOME/.git-credentials"
+export SSH_DIR="$HOME/.ssh"
 export GNUPG_DIR="$HOME/.gnupg"
 export CLAUDE_JSON="$HOME/.claude.json"
 export WORKSPACE_DIR  # Will be empty or set by user
@@ -445,6 +548,9 @@ export REPO_URL
 export REPO_DIR
 export INIT_FIREWALL
 export START_CLAUDE
+export START_PI
+export PI_EXTRA_ARGS
+export PI_CONFIG
 export SKIP_PERMISSIONS
 export GITHUB_TOKEN
 export GIT_USER_NAME
@@ -466,6 +572,8 @@ services:
       - REPO_DIR=${REPO_DIR:-/workspace/repo}
       - INIT_FIREWALL=${INIT_FIREWALL:-false}
       - START_CLAUDE=${START_CLAUDE:-true}
+      - START_PI=${START_PI:-false}
+      - PI_EXTRA_ARGS=${PI_EXTRA_ARGS:-}
       - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GIT_USER_NAME=${GIT_USER_NAME:-}
@@ -474,7 +582,7 @@ services:
       - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_den.pub}:/tmp/host_ssh_key.pub:ro
       - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
       - ${CLAUDE_JSON:-~/.claude.json}:/tmp/host_claude.json:ro
-      - ${GIT_CONFIG:-~/.gitconfig}:/home/node/.gitconfig:ro
+      - ${GIT_CONFIG:-~/.gitconfig}:/tmp/host_gitconfig:ro
       - ${GNUPG_DIR:-~/.gnupg}:/home/node/.gnupg:ro
       - ${WORKSPACE_DIR:-workspace}:/workspace
       - command-history:/commandhistory
@@ -489,11 +597,42 @@ volumes:
   workspace:
 EOF
 
+# Add conditional mounts for git authentication
+# Mount git-credentials if it exists (for HTTPS push/pull)
+if [ -f "$HOME/.git-credentials" ]; then
+    echo "Mounting ~/.git-credentials for HTTPS git authentication"
+    sed -i '/^    cap_add:/i\      - '"$HOME/.git-credentials"':/home/node/.git-credentials:ro' "$COMPOSE_FILE"
+fi
+
+# Mount SSH directory if it exists (for SSH-based git operations)
+# Exclude the den-specific public key to avoid conflicts
+if [ -d "$HOME/.ssh" ]; then
+    echo "Mounting ~/.ssh directory for SSH-based git operations"
+    sed -i '/^    cap_add:/i\      - '"$HOME/.ssh"':/home/node/.ssh-host:ro' "$COMPOSE_FILE"
+fi
+
+# Mount pi.dev config directory if it exists (entrypoint copies it to /home/node/.pi)
+if [ -d "$PI_CONFIG" ]; then
+    echo "Mounting $PI_CONFIG for pi.dev coding agent"
+    sed -i '/^    cap_add:/i\      - '"$PI_CONFIG"':/tmp/host_pi:ro' "$COMPOSE_FILE"
+fi
+
+# Mount host sccache cache directory for Rust flavor (read-write, shared with host).
+# UID match is handled by HOST_UID build arg, so files written from container
+# are owned by the same user on the host.
+if [ "$FLAVOR" = "rust" ]; then
+    HOST_SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/sccache}"
+    mkdir -p "$HOST_SCCACHE_DIR"
+    echo "Mounting $HOST_SCCACHE_DIR -> /home/node/.cache/sccache (rw) for sccache reuse"
+    sed -i '/^    cap_add:/i\      - '"$HOST_SCCACHE_DIR"':/home/node/.cache/sccache:rw' "$COMPOSE_FILE"
+fi
+
 # Add parent .git directory mount for worktrees
 if [ -n "${PARENT_GIT_DIR:-}" ]; then
     # Mount the parent .git directory at the same absolute path as on the host
     # This is needed because the worktree's .git file contains an absolute path reference
-    sed -i '/^    cap_add:/i\      - '"${PARENT_GIT_DIR}"':'"${PARENT_GIT_DIR}"':ro' "$COMPOSE_FILE"
+    # Mount as read-write to allow commits and other git operations
+    sed -i '/^    cap_add:/i\      - '"${PARENT_GIT_DIR}"':'"${PARENT_GIT_DIR}"'' "$COMPOSE_FILE"
 fi
 
 # Use docker compose to start the container
@@ -520,6 +659,12 @@ if [ "$START_CLAUDE" = "true" ]; then
     echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude"
     echo ""
 fi
+if [ "$START_PI" = "true" ]; then
+    echo "pi.dev agent is running in tmux session 'pi'"
+    echo "Attach to it:"
+    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t pi"
+    echo ""
+fi
 echo "Emacs TRAMP connection string:"
 echo "  /ssh:node@localhost#$SSH_PORT:$REPO_DIR"
 echo ""
@@ -533,8 +678,15 @@ echo "List all running containers:"
 echo "  den list"
 echo ""
 
+# Determine which tmux session to attach to (pi takes precedence when both set)
+if [ "$START_PI" = "true" ]; then
+    TMUX_SESSION="pi"
+else
+    TMUX_SESSION="claude"
+fi
+
 # Auto-SSH into tmux session if enabled
-if [ "$AUTO_SSH" = "true" ] && [ "$START_CLAUDE" = "true" ]; then
+if [ "$AUTO_SSH" = "true" ] && { [ "$START_CLAUDE" = "true" ] || [ "$START_PI" = "true" ]; }; then
     echo "Waiting for SSH to be ready..."
 
     # Wait for SSH to be available (max 30 seconds)
@@ -556,9 +708,9 @@ if [ "$AUTO_SSH" = "true" ] && [ "$START_CLAUDE" = "true" ]; then
 
     if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
         echo "WARNING: SSH didn't become ready in time. You can connect manually with:"
-        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude"
+        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t $TMUX_SESSION"
     else
-        echo "Connecting to tmux session..."
-        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude
+        echo "Connecting to tmux session '$TMUX_SESSION'..."
+        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t "$TMUX_SESSION"
     fi
 fi
