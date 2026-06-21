@@ -40,15 +40,48 @@ if [ -d /home/node/.ssh-host ]; then
     echo "SSH keys copied for git operations"
 fi
 
-# Copy Claude config directory from host if available
+# Copy Claude config directory from host if available.
+# /home/node/.claude/plugins may be a persistent volume mount, so never wipe it:
+# refresh everything else from the host, and provision the plugins cache only
+# once (when the dir is still empty). The plugin marketplace metadata records
+# host-absolute installLocation paths; those resolve via the HOST_HOME symlink
+# created below.
 if [ -d /tmp/host_claude ]; then
     echo "Copying Claude config directory..."
-    # Remove existing .claude if present, then copy from host
-    rm -rf /home/node/.claude
-    cp -r /tmp/host_claude /home/node/.claude
-    # Ensure all files are writable by the node user
+    mkdir -p /home/node/.claude
+    # Clear stale config (except the persistent plugins mount), then refresh from
+    # the host. Avoids nesting (e.g. skills/skills) when the entrypoint reruns on
+    # a container restart, while leaving the plugins volume untouched.
+    find /home/node/.claude -mindepth 1 -maxdepth 1 ! -name plugins \
+        -exec rm -rf {} +
+    find /tmp/host_claude -mindepth 1 -maxdepth 1 ! -name plugins \
+        -exec cp -a {} /home/node/.claude/ \;
+    if [ -d /tmp/host_claude/plugins ] && [ -z "$(ls -A /home/node/.claude/plugins 2>/dev/null)" ]; then
+        echo "Provisioning Claude plugins cache (first run)..."
+        mkdir -p /home/node/.claude/plugins
+        cp -a /tmp/host_claude/plugins/. /home/node/.claude/plugins/
+    fi
     chmod -R u+w /home/node/.claude
     echo "Claude config directory copied and made writable"
+fi
+
+# Copy personal agent skills directory from host if available (~/.agents).
+# The skills symlinks under ~/.claude/skills point here.
+if [ -d /tmp/host_agents ]; then
+    echo "Copying agents directory..."
+    rm -rf /home/node/.agents
+    cp -r /tmp/host_agents /home/node/.agents
+    chmod -R u+w /home/node/.agents
+    echo "Agents directory copied"
+fi
+
+# Make host-absolute paths baked into the copied config resolve inside the
+# container. The host config references the host home (e.g. /home/<you>/.claude,
+# /home/<you>/.agents, plugin installLocation paths); symlink that home to the
+# container home so all of them work without rewriting any files.
+if [ -n "${HOST_HOME:-}" ] && [ "$HOST_HOME" != "/home/node" ] && [ ! -e "$HOST_HOME" ]; then
+    sudo /bin/sh -c "mkdir -p '$(dirname "$HOST_HOME")' && ln -sfn /home/node '$HOST_HOME'"
+    echo "Linked $HOST_HOME -> /home/node (host-absolute config paths now resolve)"
 fi
 
 # Copy Claude config file from host if available
@@ -194,9 +227,11 @@ if [ "${START_CLAUDE:-true}" = "true" ]; then
 
     # Start Claude in a detached tmux session with shell fallback
     # The '|| exec bash' ensures that if claude exits, we get a shell instead of closing the session
-    tmux new-session -d -s claude "cd $REPO_DIR && $CLAUDE_CMD || exec bash"
+    # -u forces UTF-8 so glyphs aren't downgraded to '_' when the client locale
+    # isn't detected as UTF-8 (e.g. a non-interactive `ssh -t tmux attach`).
+    tmux -u new-session -d -s claude "cd $REPO_DIR && $CLAUDE_CMD || exec bash"
     echo "Claude Code started in tmux session 'claude'"
-    echo "Connect with: tmux attach -t claude"
+    echo "Connect with: tmux -u attach -t claude"
 fi
 
 # Start pi.dev coding agent if requested
@@ -206,9 +241,9 @@ if [ "${START_PI:-false}" = "true" ]; then
     if [ -n "${PI_EXTRA_ARGS:-}" ]; then
         PI_CMD="$PI_CMD $PI_EXTRA_ARGS"
     fi
-    tmux new-session -d -s pi "cd $REPO_DIR && $PI_CMD || exec bash"
+    tmux -u new-session -d -s pi "cd $REPO_DIR && $PI_CMD || exec bash"
     echo "pi.dev agent started in tmux session 'pi'"
-    echo "Connect with: tmux attach -t pi"
+    echo "Connect with: tmux -u attach -t pi"
 fi
 
 echo "Container ready! Connect via SSH on port 22"

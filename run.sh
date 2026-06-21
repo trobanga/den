@@ -52,7 +52,7 @@ case "${1:-}" in
         # Connect with optional tmux attachment
         if [ "${3:-}" = "-t" ] || [ "${3:-}" = "--tmux" ]; then
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT (attaching to tmux)..."
-            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t 'tmux attach -t pi 2>/dev/null || tmux attach -t claude'
+            exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t 'tmux -u attach -t pi 2>/dev/null || tmux -u attach -t claude'
         else
             echo "Connecting to $CONTAINER_NAME on port $SSH_PORT..."
             exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost
@@ -179,7 +179,7 @@ After starting, connect via:
     ssh -p $SSH_PORT node@localhost
 
     # Or with tmux
-    ssh -p $SSH_PORT node@localhost -t tmux attach -t claude
+    ssh -p $SSH_PORT node@localhost -t tmux -u attach -t claude
 
     # Or with Emacs TRAMP
     /ssh:node@localhost#$SSH_PORT:/workspace/repo
@@ -542,6 +542,7 @@ export GIT_CREDENTIALS="$HOME/.git-credentials"
 export SSH_DIR="$HOME/.ssh"
 export GNUPG_DIR="$HOME/.gnupg"
 export CLAUDE_JSON="$HOME/.claude.json"
+export HOST_HOME="$HOME"  # Symlinked to /home/node in container so host-absolute config paths resolve
 export WORKSPACE_DIR  # Will be empty or set by user
 export PARENT_GIT_DIR  # Will be set if using worktree
 export REPO_URL
@@ -578,6 +579,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GIT_USER_NAME=${GIT_USER_NAME:-}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-}
+      - HOST_HOME=${HOST_HOME:-}
     volumes:
       - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_den.pub}:/tmp/host_ssh_key.pub:ro
       - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
@@ -586,6 +588,7 @@ services:
       - ${GNUPG_DIR:-~/.gnupg}:/home/node/.gnupg:ro
       - ${WORKSPACE_DIR:-workspace}:/workspace
       - command-history:/commandhistory
+      - claude-plugins:/home/node/.claude/plugins
     cap_add:
       - NET_ADMIN
     stdin_open: true
@@ -595,6 +598,7 @@ services:
 volumes:
   command-history:
   workspace:
+  claude-plugins:
 EOF
 
 # Add conditional mounts for git authentication
@@ -615,6 +619,13 @@ fi
 if [ -d "$PI_CONFIG" ]; then
     echo "Mounting $PI_CONFIG for pi.dev coding agent"
     sed -i '/^    cap_add:/i\      - '"$PI_CONFIG"':/tmp/host_pi:ro' "$COMPOSE_FILE"
+fi
+
+# Mount personal agents/skills directory if it exists (entrypoint copies it to /home/node/.agents).
+# Claude skill symlinks under ~/.claude/skills point into this directory.
+if [ -d "$HOME/.agents" ]; then
+    echo "Mounting ~/.agents for personal skills"
+    sed -i '/^    cap_add:/i\      - '"$HOME/.agents"':/tmp/host_agents:ro' "$COMPOSE_FILE"
 fi
 
 # Mount host sccache cache directory for Rust flavor (read-write, shared with host).
@@ -656,13 +667,13 @@ echo ""
 if [ "$START_CLAUDE" = "true" ]; then
     echo "Claude Code is running in tmux session 'claude'"
     echo "Attach to it:"
-    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t claude"
+    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux -u attach -t claude"
     echo ""
 fi
 if [ "$START_PI" = "true" ]; then
     echo "pi.dev agent is running in tmux session 'pi'"
     echo "Attach to it:"
-    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t pi"
+    echo "  TERM=xterm-256color ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux -u attach -t pi"
     echo ""
 fi
 echo "Emacs TRAMP connection string:"
@@ -708,9 +719,9 @@ if [ "$AUTO_SSH" = "true" ] && { [ "$START_CLAUDE" = "true" ] || [ "$START_PI" =
 
     if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
         echo "WARNING: SSH didn't become ready in time. You can connect manually with:"
-        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t $TMUX_SESSION"
+        echo "  ssh -p $SSH_PORT -i ~/.ssh/id_ed25519_den node@localhost -t tmux -u attach -t $TMUX_SESSION"
     else
         echo "Connecting to tmux session '$TMUX_SESSION'..."
-        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux attach -t "$TMUX_SESSION"
+        exec env TERM=xterm-256color ssh -p "$SSH_PORT" -i ~/.ssh/id_ed25519_den node@localhost -t tmux -u attach -t "$TMUX_SESSION"
     fi
 fi

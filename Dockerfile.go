@@ -9,6 +9,12 @@ ARG CLAUDE_CODE_VERSION=latest
 
 # Use C.UTF-8 (built into glibc, no locale-gen needed)
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+# Give SSH sessions a default UTF-8 locale. sshd does not inherit Docker ENV;
+# its pam_env reads /etc/environment. Programs that probe `locale charmap`
+# (e.g. Claude Code's unicode detection) otherwise see ASCII and draw box/symbol
+# glyphs (─ │ ⎿ ⏺) as `_`. en_US.UTF-8 is generated below so a host that forwards
+# it over SSH also resolves to a real UTF-8 charmap instead of ANSI_X3.4-1968.
+RUN printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> /etc/environment
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dev tools, network filtering tools, and Claude Code (apt repo, signed).
@@ -38,6 +44,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     rsyslog \
     ncurses-term \
+    locales \
+    bubblewrap \
+    socat \
   && install -d -m 0755 /etc/apt/keyrings \
   && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
        -o /etc/apt/keyrings/claude-code.asc \
@@ -45,6 +54,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        > /etc/apt/sources.list.d/claude-code.list \
   && apt-get update && apt-get install -y --no-install-recommends claude-code \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Generate en_US.UTF-8 so a host forwarding that locale over SSH resolves to a
+# real UTF-8 charmap (Debian-slim ships only C.UTF-8 otherwise).
+RUN sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen
 
 # Install bun and pi.dev coding agent (alternative to Claude Code).
 RUN ARCH=$(dpkg --print-architecture) && \
@@ -82,7 +95,9 @@ RUN mkdir /commandhistory \
 ENV DEVCONTAINER=true
 
 # Create workspace and config directories and set permissions
-RUN mkdir -p /workspace /home/node/.claude && \
+# .claude/plugins is pre-created node-owned so the persistent named volume
+# mounted there by run.sh initializes with node ownership (not root).
+RUN mkdir -p /workspace /home/node/.claude/plugins && \
   chown -R node:node /workspace /home/node/.claude
 
 WORKDIR /workspace

@@ -3,6 +3,15 @@ FROM node:20
 ARG TZ
 ENV TZ="$TZ"
 
+# Use C.UTF-8 (built into glibc, no locale-gen needed)
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+# Give SSH sessions a default UTF-8 locale. sshd does not inherit Docker ENV;
+# its pam_env reads /etc/environment. Programs that probe `locale charmap`
+# (e.g. Claude Code's unicode detection) otherwise see ASCII and draw box/symbol
+# glyphs (─ │ ⎿ ⏺) as `_`. en_US.UTF-8 is generated below so a host that forwards
+# it over SSH also resolves to a real UTF-8 charmap instead of ANSI_X3.4-1968.
+RUN printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> /etc/environment
+
 ARG CLAUDE_CODE_VERSION=latest
 ARG FLUTTER_VERSION=stable
 
@@ -30,6 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   tmux \
   rsyslog \
   ncurses-term \
+  locales \
+  bubblewrap \
+  socat \
   curl \
   xz-utils \
   libglu1-mesa \
@@ -39,6 +51,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   pkg-config \
   libgtk-3-dev \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Generate en_US.UTF-8 so a host forwarding that locale over SSH resolves to a
+# real UTF-8 charmap.
+RUN sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen
 
 # Ensure default node user has access to /usr/local/share
 RUN mkdir -p /usr/local/share/npm-global && \
@@ -56,7 +72,9 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
 ENV DEVCONTAINER=true
 
 # Create workspace and config directories and set permissions
-RUN mkdir -p /workspace /home/node/.claude && \
+# .claude/plugins is pre-created node-owned so the persistent named volume
+# mounted there by run.sh initializes with node ownership (not root).
+RUN mkdir -p /workspace /home/node/.claude/plugins && \
   chown -R node:node /workspace /home/node/.claude
 
 WORKDIR /workspace
