@@ -176,6 +176,8 @@ RUN chown node:node /home/node/.tmux.conf
 
 # Copy the provisioning library (sourced by run.sh on the host and entrypoint.sh here)
 COPY lib/provisioning.sh /usr/local/lib/provisioning.sh
+# Copy the git-auth library (sourced by entrypoint.sh: single GIT_CONFIG_GLOBAL bootstrap)
+COPY lib/git-auth.sh /usr/local/lib/git-auth.sh
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/

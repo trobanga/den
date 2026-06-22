@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Single source of truth for host->container artifact provisioning (mounts + copies).
 source /usr/local/lib/provisioning.sh
+# Single source of truth for the container's effective git config (auth methods).
+source /usr/local/lib/git-auth.sh
 
 # Start rsyslog for SSH logging
 sudo rsyslogd
@@ -84,65 +86,9 @@ fi
 # plugins-preserving claude refresh).
 provision_artifacts
 
-# Set up git-credentials if available (for HTTPS push/pull)
-if [ -f /home/node/.git-credentials ]; then
-    echo "Git credentials file detected - configuring credential helper..."
-    # Use GIT_CONFIG_GLOBAL to layer additional config on top of mounted .gitconfig
-    export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra
-    git config --global credential.helper store
-    # Make GIT_CONFIG_GLOBAL available in user shells
-    echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.bashrc
-    if [ -f /home/node/.zshrc ]; then
-        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.zshrc
-    fi
-    if [ -f /home/node/.profile ]; then
-        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.profile
-    else
-        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" > /home/node/.profile
-    fi
-fi
-
-# Configure git credential helper for GITHUB_TOKEN (fallback if no git-credentials)
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-    echo "Configuring GitHub token authentication..."
-    # Use GIT_CONFIG_GLOBAL to layer additional config
-    if [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
-        export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra
-        # Make GIT_CONFIG_GLOBAL available in user shells
-        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.bashrc
-        if [ -f /home/node/.zshrc ]; then
-            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.zshrc
-        fi
-        if [ -f /home/node/.profile ]; then
-            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.profile
-        else
-            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" > /home/node/.profile
-        fi
-    fi
-    # Configure git to inject token into GitHub URLs
-    git config --global url."https://git:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-fi
-
-# Configure git user identity if provided
-if [ -n "${GIT_USER_NAME:-}" ] && [ -n "${GIT_USER_EMAIL:-}" ]; then
-    echo "Configuring git identity: $GIT_USER_NAME <$GIT_USER_EMAIL>"
-    # Ensure GIT_CONFIG_GLOBAL is set for user config
-    if [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
-        export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra
-        # Make GIT_CONFIG_GLOBAL available in user shells
-        echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.bashrc
-        if [ -f /home/node/.zshrc ]; then
-            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.zshrc
-        fi
-        if [ -f /home/node/.profile ]; then
-            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" >> /home/node/.profile
-        else
-            echo "export GIT_CONFIG_GLOBAL=/tmp/.gitconfig-extra" > /home/node/.profile
-        fi
-    fi
-    git config --global user.name "$GIT_USER_NAME"
-    git config --global user.email "$GIT_USER_EMAIL"
-fi
+# Apply every configured git-auth method (credentials file / GITHUB_TOKEN /
+# identity). All funnel through the module's one GIT_CONFIG_GLOBAL bootstrap.
+setup_git_auth
 
 # Start SSH server (requires root)
 sudo /usr/sbin/sshd
