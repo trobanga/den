@@ -47,6 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     bubblewrap \
     socat \
+    python3 \
+    python-is-python3 \
   && install -d -m 0755 /etc/apt/keyrings \
   && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
        -o /etc/apt/keyrings/claude-code.asc \
@@ -72,7 +74,18 @@ RUN ARCH=$(dpkg --print-architecture) && \
   mv "/tmp/bun/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun && \
   chmod +x /usr/local/bin/bun && \
   rm -rf /tmp/bun /tmp/bun.zip && \
-  BUN_INSTALL=/usr/local bun add -g @earendil-works/pi-coding-agent
+  BUN_INSTALL=/usr/local bun add -g @earendil-works/pi-coding-agent && \
+  ln -sf /usr/local/bin/bun /usr/bin/bun
+
+# Provision runtimes that copied host hooks expect (den-wa1):
+# - Node 20 (NodeSource): context-mode's cache-heal runs via `#!/usr/bin/env node`,
+#   and some plugin hooks assume a `node` on PATH (the claude-code deb bundles its
+#   own node internally and does not expose one).
+# - bd (beads): this project's issue tracker, invoked from a SessionStart hook.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+  apt-get install -y --no-install-recommends nodejs && \
+  apt-get clean && rm -rf /var/lib/apt/lists/* && \
+  curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
 # Create node user with HOST_UID so volume mounts share ownership with the host.
 RUN useradd -m -u ${HOST_UID} -s /bin/zsh node
