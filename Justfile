@@ -16,15 +16,21 @@ test:
     if [ "$rc" -eq 0 ]; then echo "✓ all tests passed"; else echo "✗ tests failed"; fi
     exit "$rc"
 
-# Build the default Docker image
+# Build the shared base image (also the default flavor: tagged den:base + den:latest)
 build:
-    docker build -t den:latest \
+    docker build -t den:base -t den:latest \
         --build-arg CLAUDE_CODE_VERSION=latest \
         --build-arg TZ=UTC \
         -f Dockerfile .
 
-# Build a specific flavor (e.g., flutter, go)
+# Build a specific flavor (e.g., flutter, go). Flavors that declare `FROM den:base`
+# get the base built first; flutter (own FROM) skips it.
 build-flavor flavor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if grep -q '^FROM den:base' Dockerfile.{{flavor}} && ! docker image inspect den:base >/dev/null 2>&1; then
+        just build
+    fi
     docker build -t den:{{flavor}} \
         --build-arg CLAUDE_CODE_VERSION=latest \
         --build-arg TZ=UTC \
@@ -39,15 +45,22 @@ build-all:
     @just build-flavor rust
     @echo "✓ All images built successfully"
 
-# Force rebuild without cache (default image)
+# Force rebuild the base image without cache (tagged den:base + den:latest)
 rebuild:
-    docker build --no-cache -t den:latest \
+    docker build --no-cache -t den:base -t den:latest \
         --build-arg CLAUDE_CODE_VERSION=latest \
         --build-arg TZ=UTC \
         -f Dockerfile .
 
-# Force rebuild a specific flavor without cache
+# Force rebuild a specific flavor without cache. Rebuilds the flavor layers on top
+# of the CURRENT den:base (builds base only if missing); run `just rebuild` first
+# to refresh the base itself.
 rebuild-flavor flavor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if grep -q '^FROM den:base' Dockerfile.{{flavor}} && ! docker image inspect den:base >/dev/null 2>&1; then
+        just build
+    fi
     docker build --no-cache -t den:{{flavor}} \
         --build-arg CLAUDE_CODE_VERSION=latest \
         --build-arg TZ=UTC \

@@ -1,3 +1,6 @@
+# den:base — the shared base image. Flavor Dockerfiles (Dockerfile.go, Dockerfile.rust)
+# build `FROM den:base` and add only their toolchain; common setup lives here once.
+# run.sh / Justfile build this (tagged den:base AND den:latest) before any derived flavor.
 FROM debian:bookworm-slim
 
 ARG TZ

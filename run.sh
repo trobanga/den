@@ -505,25 +505,42 @@ else
     IMAGE_TAG="den:latest"
 fi
 
-# Build image if it doesn't exist
-if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-    echo "Building $IMAGE_TAG image..."
-    cd "$SCRIPT_DIR" || {
-        echo "ERROR: Failed to change to script directory: $SCRIPT_DIR"
-        exit 1
-    }
+cd "$SCRIPT_DIR" || {
+    echo "ERROR: Failed to change to script directory: $SCRIPT_DIR"
+    exit 1
+}
+if [ ! -f "$DOCKERFILE" ]; then
+    echo "ERROR: $DOCKERFILE not found in $SCRIPT_DIR"
+    exit 1
+fi
 
-    # Check if Dockerfile exists
-    if [ ! -f "$DOCKERFILE" ]; then
-        echo "ERROR: $DOCKERFILE not found in $SCRIPT_DIR"
-        exit 1
-    fi
-
-    docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" \
+build_image() {  # $1 = Dockerfile, then -t tag args...
+    local dockerfile="$1"; shift
+    docker build -f "$dockerfile" "$@" \
         --build-arg CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}" \
         --build-arg TZ="${TZ:-UTC}" \
         --build-arg HOST_UID="$(id -u)" \
         .
+}
+
+# The shared base (den:base, also tagged den:latest for the default flavor) must
+# exist before any flavor that declares `FROM den:base`. The dependency is read
+# from the flavor Dockerfile itself, so a new flavor opts in just by using that
+# FROM line — no change needed here.
+if grep -q '^FROM den:base' "$DOCKERFILE" && ! docker image inspect den:base >/dev/null 2>&1; then
+    echo "Building den:base image (required by $DOCKERFILE)..."
+    build_image Dockerfile -t den:base -t den:latest
+fi
+
+# Build the selected image if it doesn't exist.
+if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+    echo "Building $IMAGE_TAG image..."
+    if [ "$DOCKERFILE" = "Dockerfile" ]; then
+        # The default flavor IS the base: tag it both ways so derived flavors find it.
+        build_image Dockerfile -t den:base -t den:latest
+    else
+        build_image "$DOCKERFILE" -t "$IMAGE_TAG"
+    fi
 fi
 
 # Prepare GitHub authentication for git clone
