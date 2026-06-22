@@ -193,6 +193,9 @@ RUN mkdir -p /home/node/.ssh && \
 COPY .tmux.conf /home/node/.tmux.conf
 RUN chown node:node /home/node/.tmux.conf
 
+# Copy the provisioning library (sourced by run.sh on the host and entrypoint.sh here)
+COPY lib/provisioning.sh /usr/local/lib/provisioning.sh
+
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh

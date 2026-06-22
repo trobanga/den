@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Single source of truth for host->container artifact provisioning (mounts + copies).
+source /usr/local/lib/provisioning.sh
+
 # Start rsyslog for SSH logging
 sudo rsyslogd
 
@@ -65,16 +68,6 @@ if [ -d /tmp/host_claude ]; then
     echo "Claude config directory copied and made writable"
 fi
 
-# Copy personal agent skills directory from host if available (~/.agents).
-# The skills symlinks under ~/.claude/skills point here.
-if [ -d /tmp/host_agents ]; then
-    echo "Copying agents directory..."
-    rm -rf /home/node/.agents
-    cp -r /tmp/host_agents /home/node/.agents
-    chmod -R u+w /home/node/.agents
-    echo "Agents directory copied"
-fi
-
 # Make host-absolute paths baked into the copied config resolve inside the
 # container. The host config references the host home (e.g. /home/<you>/.claude,
 # /home/<you>/.agents, plugin installLocation paths); symlink that home to the
@@ -84,28 +77,12 @@ if [ -n "${HOST_HOME:-}" ] && [ "$HOST_HOME" != "/home/node" ] && [ ! -e "$HOST_
     echo "Linked $HOST_HOME -> /home/node (host-absolute config paths now resolve)"
 fi
 
-# Copy Claude config file from host if available
-if [ -f /tmp/host_claude.json ]; then
-    cp /tmp/host_claude.json /home/node/.claude.json
-    chmod 644 /home/node/.claude.json
-    echo "Claude config file copied and made writable"
-fi
-
-# Copy pi.dev config directory from host if available
-if [ -d /tmp/host_pi ]; then
-    echo "Copying pi.dev config directory..."
-    rm -rf /home/node/.pi
-    cp -r /tmp/host_pi /home/node/.pi
-    chmod -R u+w /home/node/.pi
-    echo "pi.dev config directory copied and made writable"
-fi
-
-# Set up git configuration from host (mounted at /tmp/host_gitconfig)
-if [ -f /tmp/host_gitconfig ]; then
-    echo "Copying git config from host..."
-    cp /tmp/host_gitconfig /home/node/.gitconfig
-    chmod 644 /home/node/.gitconfig
-fi
+# Copy the uniform artifacts (claude.json, gitconfig, pi, agents) from their
+# mounts into place. One call, driven by the shared provisioning table: adding a
+# uniform artifact is a new table row, not another copy block here. ssh-key,
+# ssh-host and claude stay bespoke above (special dest / selective copy / the
+# plugins-preserving claude refresh).
+provision_artifacts
 
 # Set up git-credentials if available (for HTTPS push/pull)
 if [ -f /home/node/.git-credentials ]; then

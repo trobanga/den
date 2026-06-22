@@ -18,6 +18,9 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 
+# Single source of truth for host->container artifact provisioning (mounts + copies).
+source "$SCRIPT_DIR/lib/provisioning.sh"
+
 # Check for subcommands first
 case "${1:-}" in
     stop)
@@ -542,6 +545,10 @@ export GIT_CREDENTIALS="$HOME/.git-credentials"
 export SSH_DIR="$HOME/.ssh"
 export GNUPG_DIR="$HOME/.gnupg"
 export CLAUDE_JSON="$HOME/.claude.json"
+export AGENTS_DIR="$HOME/.agents"
+# Always resolved so the provisioning table can reference it; the mount itself is
+# gated to the rust flavor (host_cond=if-rust). SCCACHE_DIR lets the user override.
+export HOST_SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/sccache}"
 export HOST_HOME="$HOME"  # Symlinked to /home/node in container so host-absolute config paths resolve
 export WORKSPACE_DIR  # Will be empty or set by user
 export PARENT_GIT_DIR  # Will be set if using worktree
@@ -560,7 +567,19 @@ export IMAGE_TAG  # Image tag to use (includes flavor)
 
 # Generate compose file on-the-fly
 COMPOSE_FILE="/tmp/den-$CONTAINER_NAME.yaml"
-cat > "$COMPOSE_FILE" <<'EOF'
+
+# sccache cache dir must exist before the container bind-mounts it (rust only).
+# Kept here as a side-effect so emit_mounts stays a pure table -> text transform.
+if [ "$FLAVOR" = "rust" ]; then
+    mkdir -p "$HOST_SCCACHE_DIR"
+fi
+
+# Assemble compose: scaffold + infra mounts (top heredoc), then every artifact
+# mount straight from the provisioning table (emit_mounts), then the tail. No
+# sed injection against a brittle anchor line — the table is the one source of
+# truth for what gets mounted, shared with entrypoint.sh's copy side.
+{
+cat <<'EOF'
 services:
   den:
     image: ${IMAGE_TAG:-den:latest}
@@ -581,14 +600,12 @@ services:
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-}
       - HOST_HOME=${HOST_HOME:-}
     volumes:
-      - ${SSH_PUBLIC_KEY:-~/.ssh/id_ed25519_den.pub}:/tmp/host_ssh_key.pub:ro
-      - ${CLAUDE_CONFIG:-~/.claude}:/tmp/host_claude:ro
-      - ${CLAUDE_JSON:-~/.claude.json}:/tmp/host_claude.json:ro
-      - ${GIT_CONFIG:-~/.gitconfig}:/tmp/host_gitconfig:ro
-      - ${GNUPG_DIR:-~/.gnupg}:/home/node/.gnupg:ro
       - ${WORKSPACE_DIR:-workspace}:/workspace
       - command-history:/commandhistory
       - claude-plugins:/home/node/.claude/plugins
+EOF
+emit_mounts "$FLAVOR"
+cat <<'EOF'
     cap_add:
       - NET_ADMIN
     stdin_open: true
@@ -600,51 +617,7 @@ volumes:
   workspace:
   claude-plugins:
 EOF
-
-# Add conditional mounts for git authentication
-# Mount git-credentials if it exists (for HTTPS push/pull)
-if [ -f "$HOME/.git-credentials" ]; then
-    echo "Mounting ~/.git-credentials for HTTPS git authentication"
-    sed -i '/^    cap_add:/i\      - '"$HOME/.git-credentials"':/home/node/.git-credentials:ro' "$COMPOSE_FILE"
-fi
-
-# Mount SSH directory if it exists (for SSH-based git operations)
-# Exclude the den-specific public key to avoid conflicts
-if [ -d "$HOME/.ssh" ]; then
-    echo "Mounting ~/.ssh directory for SSH-based git operations"
-    sed -i '/^    cap_add:/i\      - '"$HOME/.ssh"':/home/node/.ssh-host:ro' "$COMPOSE_FILE"
-fi
-
-# Mount pi.dev config directory if it exists (entrypoint copies it to /home/node/.pi)
-if [ -d "$PI_CONFIG" ]; then
-    echo "Mounting $PI_CONFIG for pi.dev coding agent"
-    sed -i '/^    cap_add:/i\      - '"$PI_CONFIG"':/tmp/host_pi:ro' "$COMPOSE_FILE"
-fi
-
-# Mount personal agents/skills directory if it exists (entrypoint copies it to /home/node/.agents).
-# Claude skill symlinks under ~/.claude/skills point into this directory.
-if [ -d "$HOME/.agents" ]; then
-    echo "Mounting ~/.agents for personal skills"
-    sed -i '/^    cap_add:/i\      - '"$HOME/.agents"':/tmp/host_agents:ro' "$COMPOSE_FILE"
-fi
-
-# Mount host sccache cache directory for Rust flavor (read-write, shared with host).
-# UID match is handled by HOST_UID build arg, so files written from container
-# are owned by the same user on the host.
-if [ "$FLAVOR" = "rust" ]; then
-    HOST_SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/sccache}"
-    mkdir -p "$HOST_SCCACHE_DIR"
-    echo "Mounting $HOST_SCCACHE_DIR -> /home/node/.cache/sccache (rw) for sccache reuse"
-    sed -i '/^    cap_add:/i\      - '"$HOST_SCCACHE_DIR"':/home/node/.cache/sccache:rw' "$COMPOSE_FILE"
-fi
-
-# Add parent .git directory mount for worktrees
-if [ -n "${PARENT_GIT_DIR:-}" ]; then
-    # Mount the parent .git directory at the same absolute path as on the host
-    # This is needed because the worktree's .git file contains an absolute path reference
-    # Mount as read-write to allow commits and other git operations
-    sed -i '/^    cap_add:/i\      - '"${PARENT_GIT_DIR}"':'"${PARENT_GIT_DIR}"'' "$COMPOSE_FILE"
-fi
+} > "$COMPOSE_FILE"
 
 # Use docker compose to start the container
 docker compose -p "den-$CONTAINER_NAME" -f "$COMPOSE_FILE" up -d

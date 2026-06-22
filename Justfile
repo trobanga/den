@@ -4,6 +4,18 @@
 default:
     @just --list
 
+# Run the standalone shell test suite (tests/*.sh)
+test:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for t in tests/*.sh; do
+        printf '── %s\n' "$t"
+        "$t" || rc=1
+    done
+    if [ "$rc" -eq 0 ]; then echo "✓ all tests passed"; else echo "✗ tests failed"; fi
+    exit "$rc"
+
 # Build the default Docker image
 build:
     docker build -t den:latest \
