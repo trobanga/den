@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 # Single source of truth for host->container artifact provisioning (mounts + copies).
 source "$SCRIPT_DIR/lib/provisioning.sh"
+# Host-side compose-document render (render_compose; uses emit_mounts above).
+source "$SCRIPT_DIR/lib/compose.sh"
 
 # Check for subcommands first
 case "${1:-}" in
@@ -591,50 +593,11 @@ if [ "$FLAVOR" = "rust" ]; then
     mkdir -p "$HOST_SCCACHE_DIR"
 fi
 
-# Assemble compose: scaffold + infra mounts (top heredoc), then every artifact
-# mount straight from the provisioning table (emit_mounts), then the tail. No
-# sed injection against a brittle anchor line — the table is the one source of
-# truth for what gets mounted, shared with entrypoint.sh's copy side.
-{
-cat <<'EOF'
-services:
-  den:
-    image: ${IMAGE_TAG:-den:latest}
-    container_name: ${CONTAINER_NAME:-den}
-    hostname: ${CONTAINER_NAME:-den}
-    ports:
-      - "${SSH_PORT:-2222}:22"
-    environment:
-      - REPO_URL=${REPO_URL:-}
-      - REPO_DIR=${REPO_DIR:-/workspace/repo}
-      - INIT_FIREWALL=${INIT_FIREWALL:-false}
-      - START_CLAUDE=${START_CLAUDE:-true}
-      - START_PI=${START_PI:-false}
-      - PI_EXTRA_ARGS=${PI_EXTRA_ARGS:-}
-      - SKIP_PERMISSIONS=${SKIP_PERMISSIONS:-false}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - GIT_USER_NAME=${GIT_USER_NAME:-}
-      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-}
-      - HOST_HOME=${HOST_HOME:-}
-    volumes:
-      - ${WORKSPACE_DIR:-workspace}:/workspace
-      - command-history:/commandhistory
-      - claude-plugins:/home/node/.claude/plugins
-EOF
-emit_mounts "$FLAVOR"
-cat <<'EOF'
-    cap_add:
-      - NET_ADMIN
-    stdin_open: true
-    tty: true
-    restart: unless-stopped
-
-volumes:
-  command-history:
-  workspace:
-  claude-plugins:
-EOF
-} > "$COMPOSE_FILE"
+# Render the whole compose document from the provisioning table (one testable
+# seam — see lib/compose.sh / tests/test_compose_render.sh). No sed, no brittle
+# anchor line; the table is the single source of truth for what gets mounted,
+# shared with entrypoint.sh's copy side.
+render_compose "$FLAVOR" > "$COMPOSE_FILE"
 
 # Use docker compose to start the container
 docker compose -p "den-$CONTAINER_NAME" -f "$COMPOSE_FILE" up -d
